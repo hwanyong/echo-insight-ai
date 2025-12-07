@@ -1,5 +1,6 @@
 import React from 'react';
 import { GoogleMap } from './components/GoogleMap';
+import { Sidebar } from './components/Sidebar';
 import { GOOGLE_MAPS_API_KEY } from './config';
 
 const App: React.FC = () => {
@@ -16,8 +17,14 @@ const App: React.FC = () => {
   const apiKey = localStorage.getItem('google_maps_api_key') || GOOGLE_MAPS_API_KEY || (envKey && envKey !== 'undefined' ? envKey : '');
 
   return (
-    <main className="w-screen h-screen overflow-hidden bg-gray-100">
-      <GoogleMap apiKey={apiKey} />
+    <main className="relative w-screen h-screen overflow-hidden bg-gray-100">
+      {/* Map Layer - Full Screen */}
+      <div className="absolute inset-0 z-0">
+        <GoogleMap apiKey={apiKey} />
+      </div>
+
+      {/* UI Layer - Glassmorphism Sidebar */}
+      <Sidebar />
     </main>
   );
 };
