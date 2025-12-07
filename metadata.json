@@ -1,0 +1,7 @@
+{
+  "name": "Minimal Fullscreen Maps",
+  "description": "A minimalist, full-screen Google Maps application designed for mobile and desktop. Focuses purely on map navigation with zero clutter.",
+  "requestFramePermissions": [
+    "geolocation"
+  ]
+}
