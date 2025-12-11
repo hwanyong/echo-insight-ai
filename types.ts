@@ -17,6 +17,8 @@ export interface GoogleMapProps {
   apiKey: string;
   initialCenter?: MapCoordinates;
   initialZoom?: number;
+  user?: any;
+  authError?: string | null;
 }
 
 export type MapLayerType = 'none' | 'street';

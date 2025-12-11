@@ -161,6 +161,8 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
   apiKey,
   initialCenter = DEFAULT_CENTER,
   initialZoom = DEFAULT_ZOOM,
+  user,
+  authError,
 }) => {
   const mapRef = useRef<HTMLDivElement>(null);
   const [mapInstance, setMapInstance] = useState<any>(null);
@@ -191,6 +193,15 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
   const selectionRectRef = useRef<any>(null);
   const drawingListenersRef = useRef<any[]>([]);
   const resultMarkersRef = useRef<any[]>([]); // To store result markers
+
+  // --- Validation Log ---
+  useEffect(() => {
+    if (apiKey) {
+      console.log("📍 GoogleMap: Key received successfully.", apiKey.slice(0, 10) + "...");
+    } else {
+      console.warn("📍 GoogleMap: No API Key received.");
+    }
+  }, [apiKey]);
   
   // --- Helpers ---
   
@@ -773,7 +784,7 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
       )}
 
       {/* Sidebar: Menu Button (Left) */}
-      <Sidebar isHidden={isPanoramaActive} />
+      <Sidebar isHidden={isPanoramaActive} user={user} authError={authError} />
 
       {/* Stats Modal */}
       {showStats && (

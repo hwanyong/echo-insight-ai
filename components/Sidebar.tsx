@@ -2,9 +2,11 @@ import React, { useState } from 'react';
 
 interface SidebarProps {
   isHidden?: boolean;
+  user?: any;
+  authError?: string | null;
 }
 
-export const Sidebar: React.FC<SidebarProps> = ({ isHidden = false }) => {
+export const Sidebar: React.FC<SidebarProps> = ({ isHidden = false, user, authError }) => {
   const [isOpen, setIsOpen] = useState(false);
 
   // If globally hidden (e.g. Street View active), hide everything
@@ -47,8 +49,10 @@ export const Sidebar: React.FC<SidebarProps> = ({ isHidden = false }) => {
             </div>
             
             <div className="flex items-center gap-2 text-[10px] text-slate-400">
-                <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
-                System Active
+                <div className={`w-2 h-2 rounded-full ${user ? 'bg-green-500' : (authError ? 'bg-red-500' : 'bg-yellow-500')} animate-pulse`}></div>
+                {user 
+                  ? `User: ${user.uid.slice(0, 6)}...` 
+                  : (authError ? `Offline (${authError.includes('key') ? 'Key Expired' : 'Auth Failed'})` : 'Connecting...')}
             </div>
           </div>
         </div>
