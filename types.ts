@@ -18,3 +18,5 @@ export interface GoogleMapProps {
   initialCenter?: MapCoordinates;
   initialZoom?: number;
 }
+
+export type MapLayerType = 'none' | 'street';

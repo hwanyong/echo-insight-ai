@@ -1,12 +1,10 @@
 import React from 'react';
 import { GoogleMap } from './components/GoogleMap';
-import { Sidebar } from './components/Sidebar';
 import { GOOGLE_MAPS_API_KEY } from './config';
 
 const App: React.FC = () => {
   // SECURITY NOTE: 
   // The API key is managed in config.ts.
-  // Ensure config.ts is listed in your .gitignore file.
   
   const envKey = process.env.GOOGLE_MAPS_API_KEY;
   
@@ -17,14 +15,11 @@ const App: React.FC = () => {
   const apiKey = localStorage.getItem('google_maps_api_key') || GOOGLE_MAPS_API_KEY || (envKey && envKey !== 'undefined' ? envKey : '');
 
   return (
-    <main className="relative w-screen h-screen overflow-hidden bg-gray-100">
+    <main className="relative w-screen h-screen overflow-hidden bg-gray-50">
       {/* Map Layer - Full Screen */}
       <div className="absolute inset-0 z-0">
         <GoogleMap apiKey={apiKey} />
       </div>
-
-      {/* UI Layer - Glassmorphism Sidebar */}
-      <Sidebar />
     </main>
   );
 };
