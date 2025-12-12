@@ -1,8 +1,11 @@
+
 // Import the functions you need from the SDKs you need
 // Using full URL imports to match the environment without npm install
 import { initializeApp } from "https://www.gstatic.com/firebasejs/12.6.0/firebase-app.js";
 import { getAnalytics } from "https://www.gstatic.com/firebasejs/12.6.0/firebase-analytics.js";
 import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/12.6.0/firebase-auth.js";
+import { getFirestore, collection, doc, onSnapshot, query, limit } from "https://www.gstatic.com/firebasejs/12.6.0/firebase-firestore.js";
+import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/12.6.0/firebase-functions.js";
 
 // Your web app's Firebase configuration
 // The previous apiKey "AIzaSyA3..." was expired. Switching to GOOGLE_MAPS_API_KEY.
@@ -20,6 +23,22 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const analytics = getAnalytics(app);
 const auth = getAuth(app);
+const db = getFirestore(app);
+const functions = getFunctions(app);
 
 // Export so other components can use them
-export { app, analytics, auth, signInAnonymously, onAuthStateChanged };
+export { 
+  app, 
+  analytics, 
+  auth, 
+  db, 
+  functions,
+  signInAnonymously, 
+  onAuthStateChanged,
+  collection,
+  doc,
+  onSnapshot,
+  query,
+  limit,
+  httpsCallable
+};
