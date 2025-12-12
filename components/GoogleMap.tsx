@@ -160,6 +160,13 @@ const PricingStatsModal: React.FC<PricingStatsModalProps> = ({ count, onClose })
   );
 };
 
+// Image Interface for Upload
+interface UploadedImage {
+    id: string;
+    file: File;
+    previewUrl: string;
+}
+
 export const GoogleMap: React.FC<GoogleMapProps> = ({
   apiKey,
   initialCenter = DEFAULT_CENTER,
@@ -178,6 +185,7 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
   // Search Mode State
   const [searchMode, setSearchMode] = useState<'places' | 'vision'>('places');
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  const [uploadedImages, setUploadedImages] = useState<UploadedImage[]>([]);
 
   // Layer State
   const [activeLayer, setActiveLayer] = useState<MapLayerType>('none');
@@ -244,6 +252,23 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
     });
     resultMarkersRef.current.clear();
   }, []);
+
+  // --- Image Upload Logic ---
+  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files) {
+        const newImages: UploadedImage[] = Array.from(e.target.files).map(file => ({
+            id: Math.random().toString(36).substr(2, 9),
+            file: file,
+            previewUrl: URL.createObjectURL(file)
+        }));
+        setUploadedImages(prev => [...prev, ...newImages]);
+    }
+  };
+
+  const removeImage = (id: string) => {
+      setUploadedImages(prev => prev.filter(img => img.id !== id));
+  };
+
 
   // --- Server Upload & Realtime Sync Logic ---
 
@@ -901,12 +926,40 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
           </>
       )}
 
-      {/* 3. Bottom Center Search Bar (Updated Design with Dropdown) */}
+      {/* 3. Bottom Center Search Bar (Updated Design with Dropdown & Image Tray) */}
       {!isLoading && !showKeyInput && !isPanoramaActive && (
-        <div className="absolute bottom-8 left-1/2 -translate-x-1/2 w-full max-w-md px-4 z-30">
-            <div className="relative pointer-events-auto shadow-2xl rounded-full transition-transform bg-white/90 backdrop-blur-xl border border-white/40 flex items-center group-focus-within:scale-[1.02]">
+        <div className="absolute bottom-8 left-1/2 -translate-x-1/2 w-full max-w-md px-4 z-30 flex flex-col items-center">
+            
+            {/* Image Upload Tray (Appears in Vision Mode) */}
+            {searchMode === 'vision' && (
+                <div className="w-full mb-3 flex gap-2 overflow-x-auto py-1 px-1 animate-in slide-in-from-bottom-4 fade-in duration-300 no-scrollbar">
+                    {/* Add Button */}
+                    <label className="flex-shrink-0 cursor-pointer group">
+                        <input type="file" multiple accept="image/*" onChange={handleImageUpload} className="hidden" />
+                        <div className="w-14 h-14 bg-white/80 backdrop-blur-md rounded-xl border border-white/40 shadow-lg flex items-center justify-center text-violet-500 group-hover:bg-white group-hover:scale-105 transition-all">
+                            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+                        </div>
+                    </label>
+
+                    {/* Image Thumbnails */}
+                    {uploadedImages.map((img) => (
+                        <div key={img.id} className="relative flex-shrink-0 w-14 h-14 rounded-xl overflow-hidden shadow-lg border border-white/40 group animate-in zoom-in duration-200">
+                            <img src={img.previewUrl} alt="preview" className="w-full h-full object-cover" />
+                            <button 
+                                onClick={() => removeImage(img.id)}
+                                className="absolute top-0.5 right-0.5 bg-black/50 text-white rounded-full p-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
+                            >
+                                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                            </button>
+                        </div>
+                    ))}
+                </div>
+            )}
+
+            {/* Main Search Bar Container - Fixed Height (h-14) with Stretch alignment */}
+            <div className="w-full h-14 relative pointer-events-auto shadow-2xl rounded-full transition-transform bg-white/90 backdrop-blur-xl border border-white/40 flex items-stretch group-focus-within:scale-[1.02]">
                 
-                {/* Search Mode Dropdown Menu (Appears Above with slide-in animation) */}
+                {/* Search Mode Dropdown Menu (Appears Above) */}
                 {isDropdownOpen && (
                   <div className="absolute bottom-full left-0 mb-3 w-40 bg-white/95 backdrop-blur-xl border border-white/50 shadow-2xl rounded-2xl overflow-hidden animate-in slide-in-from-bottom-2 fade-in duration-300 z-50 origin-bottom">
                      <button 
@@ -929,10 +982,10 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
                   </div>
                 )}
 
-                {/* Left: Mode Dropdown Trigger */}
+                {/* Left: Mode Dropdown Trigger - EXPANDED CLICK AREA */}
                 <button 
                     onClick={() => setIsDropdownOpen(!isDropdownOpen)}
-                    className="flex items-center gap-2 pl-5 pr-3 py-4 text-gray-600 hover:text-gray-900 border-r border-gray-200/50 transition-colors active:scale-95"
+                    className="flex items-center gap-2 pl-6 pr-4 h-full rounded-l-full text-gray-600 hover:text-gray-900 hover:bg-black/5 border-r border-gray-200/50 transition-colors cursor-pointer active:scale-95 z-10 outline-none"
                 >
                     <span className="text-sm font-semibold tracking-tight min-w-[3rem] text-left">
                         {searchMode === 'places' ? 'Places' : 'Vision'}
@@ -940,17 +993,17 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
                     <svg className={`w-3 h-3 text-gray-400 transition-transform duration-300 ease-out ${isDropdownOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
                 </button>
 
-                {/* Center: Input */}
+                {/* Center: Input - FULL HEIGHT */}
                 <input 
                     type="text" 
-                    className="flex-1 py-4 px-4 text-base text-gray-900 bg-transparent focus:outline-none placeholder-gray-400 transition-all"
+                    className="flex-1 h-full px-4 text-base text-gray-900 bg-transparent focus:outline-none placeholder-gray-400 transition-all"
                     placeholder={searchMode === 'places' ? "Search city or address..." : "Describe what to find..."}
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
                 />
 
-                {/* Right: Submit Button (Dynamic Icon with elastic pop effect) */}
-                <div className="pr-2">
+                {/* Right: Submit Button - CENTERED */}
+                <div className="pr-2 flex items-center z-10">
                     <button className={`p-2 rounded-full text-white transition-all duration-300 shadow-md flex items-center justify-center hover:scale-110 active:scale-90 ${searchMode === 'places' ? 'bg-blue-600 hover:bg-blue-700 shadow-blue-500/30' : 'bg-violet-600 hover:bg-violet-700 shadow-violet-500/30'}`}>
                         {searchMode === 'places' ? (
                             // Search Icon
