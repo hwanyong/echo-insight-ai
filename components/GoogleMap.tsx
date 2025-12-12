@@ -256,6 +256,23 @@ interface ActivePanoState {
     locked: boolean; // true = clicked (persistent), false = hovered (transient)
 }
 
+// Helper: Convert Blob URL to Base64
+const blobUrlToBase64 = async (url: string): Promise<string> => {
+    try {
+        const response = await fetch(url);
+        const blob = await response.blob();
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onloadend = () => resolve(reader.result as string);
+            reader.onerror = reject;
+            reader.readAsDataURL(blob);
+        });
+    } catch (e) {
+        console.error("Failed to convert blob to base64", e);
+        return "";
+    }
+};
+
 export const GoogleMap: React.FC<GoogleMapProps> = ({
   apiKey,
   initialCenter = DEFAULT_CENTER,
@@ -599,6 +616,13 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
     try {
         const uploadScanData = httpsCallable(functions, 'uploadScanData');
         
+        // --- NEW: Convert Blob URLs to Base64 ---
+        const base64Images = await Promise.all(
+            uploadedImages.map(img => blobUrlToBase64(img.previewUrl))
+        );
+        const validQueryImages = base64Images.filter(img => img !== "");
+        // ----------------------------------------
+
         // 1. Calculate Bounding Box and Center for Metadata
         const lats = foundPanos.map(p => p.lat);
         const lngs = foundPanos.map(p => p.lng);
@@ -620,7 +644,7 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
         const payload = {
             searchContext: {
                 queryText: searchQuery,
-                queryImages: uploadedImages.map(img => img.previewUrl), 
+                queryImages: validQueryImages, // Changed from uploadedImages.map(img => img.previewUrl)
                 searchMode: searchMode,
                 timestamp: new Date().toISOString()
             },
