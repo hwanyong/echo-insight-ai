@@ -231,7 +231,11 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
   }>>(new Map());
 
   const drawingListenersRef = useRef<any[]>([]);
+  
+  // Layer 1: Base Grid Markers (Purple Dots)
   const resultMarkersRef = useRef<Map<string, any>>(new Map());
+  // Layer 2: Match/Found Markers (Pins)
+  const matchMarkersRef = useRef<Map<string, any>>(new Map());
 
   // Ref to track found pano IDs to prevent duplicates across multiple scans
   const foundPanoIdsRef = useRef<Set<string>>(new Set());
@@ -259,10 +263,17 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
   }, [mapInstance]);
 
   const clearResultMarkers = useCallback(() => {
+    // Clear Base Grid Markers
     resultMarkersRef.current.forEach((marker) => {
         if (marker) marker.map = null;
     });
     resultMarkersRef.current.clear();
+
+    // Clear Found Match Markers
+    matchMarkersRef.current.forEach((marker) => {
+        if (marker) marker.map = null;
+    });
+    matchMarkersRef.current.clear();
   }, []);
 
   const getRandomColor = () => {
@@ -399,12 +410,19 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
 
           // Cleanup Markers and Refs
           removeIds.forEach(panoId => {
-              // Remove Marker from Map
+              // Remove Base Marker
               const marker = resultMarkersRef.current.get(panoId);
               if (marker) {
                   marker.map = null;
                   resultMarkersRef.current.delete(panoId);
               }
+              // Remove Match Marker (if any)
+              const matchMarker = matchMarkersRef.current.get(panoId);
+              if (matchMarker) {
+                  matchMarker.map = null;
+                  matchMarkersRef.current.delete(panoId);
+              }
+
               // Remove ID from duplicate check set
               foundPanoIdsRef.current.delete(panoId);
           });
@@ -538,7 +556,7 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
         }
 
         // 3. AI Result Normalization
-        // Update: Included `raw.visionResult` to support new Vision Search data structure
+        // CRITICAL FIX: Include `raw.visionResult` to correctly map Vision Search API results
         const aiResultRaw = raw.visionResult || raw.aiResult || raw.aiResultRaw;
         
         // ADAPTER: Handle "Flat" JSON from logs if "detected_objects" is missing
@@ -576,7 +594,8 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
 
         updates[data.panoId] = data;
 
-        // 4. Marker Restore/Update Logic
+        // 4. Marker Restore/Update Logic (Base Grid Markers Only)
+        // Match markers are handled in the useEffect based on scanPoints state
         let marker = resultMarkersRef.current.get(data.panoId);
         
         // If marker is missing (e.g. after refresh), create it
@@ -615,11 +634,6 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
                 }
             }
         } else {
-             // Update existing marker visual
-             console.log(`🎨 [Sync] Updating visual for ${data.panoId}`);
-             if (marker.content) {
-                updateMarkerVisual(marker.content as HTMLElement, data);
-             }
              // Update position if it was 0,0 or changed
              if (marker.position && (marker.position.lat !== location.latitude || marker.position.lng !== location.longitude)) {
                  console.log(`📍 [Sync] Correcting marker position for ${data.panoId}`);
@@ -642,6 +656,7 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
     };
   }, [jobId, mapInstance]);
 
+  // Update Visuals for Base Markers (Grid)
   const updateMarkerVisual = (div: HTMLElement, point: ScanPoint) => {
     div.className = "marker-glass";
     div.style.width = "12px";
@@ -654,23 +669,87 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
     if (point.status === 'analyzing') {
         div.classList.add('marker-analyzing');
     } else if (point.status === 'done') {
-        const foundCount = point.aiResult?.detected_objects?.length || 0;
-        
-        if (foundCount === 0) {
-             div.classList.add('marker-empty');
-        } else {
-             // Found Something -> Use Green/Blue (formerly Safe) style logic, or specific 'found' logic
-             // Reusing 'marker-safe' class but logically it means 'Found Object'
-             div.classList.add('marker-safe');
-             div.style.backgroundColor = "#3b82f6"; // Blue 500 for found
-             div.style.borderColor = "#93c5fd";
-        }
+        // Base marker becomes "processed" (dimmed)
+        div.style.opacity = "0.3"; 
+        div.style.backgroundColor = "#94a3b8"; // Slate-400
+        div.classList.remove('marker-analyzing');
     } else if (point.status === 'error') {
-        div.style.backgroundColor = "#64748b"; 
+        div.style.backgroundColor = "#ef4444"; 
     } else {
         div.style.backgroundColor = "#8b5cf6"; 
+        div.style.opacity = "1";
     }
   };
+
+  // --- Effect: Sync Result Markers (Layer 2) ---
+  useEffect(() => {
+    const syncMatchMarkers = async () => {
+        if (!mapInstance) return;
+        
+        let AdvancedMarkerElement: any;
+        let PinElement: any;
+
+        if (window.google?.maps?.importLibrary) {
+             const markerLib = await window.google.maps.importLibrary("marker");
+             AdvancedMarkerElement = markerLib.AdvancedMarkerElement;
+             PinElement = markerLib.PinElement;
+        } else {
+             AdvancedMarkerElement = window.google.maps.marker.AdvancedMarkerElement;
+             PinElement = window.google.maps.marker.PinElement;
+        }
+
+        if (!AdvancedMarkerElement || !PinElement) return;
+
+        Object.values(scanPoints).forEach(point => {
+            const foundCount = point.aiResult?.detected_objects?.length || 0;
+            
+            // 1. Handle Match Marker (Layer 2) - Only add if Found
+            if (foundCount > 0 && point.status === 'done') {
+                if (!matchMarkersRef.current.has(point.panoId)) {
+                    // Create distinctive Match Marker (Pin)
+                    const pin = new PinElement({
+                        glyphColor: "white",
+                        background: "#2563eb", // Blue-600
+                        borderColor: "#1e3a8a", // Blue-900
+                        scale: 1.1,
+                    });
+
+                    const marker = new AdvancedMarkerElement({
+                        map: mapInstance,
+                        position: { lat: point.location.latitude, lng: point.location.longitude },
+                        content: pin.element,
+                        title: `Found: ${foundCount} objects`,
+                        zIndex: 100 // Float above grid
+                    });
+
+                    marker.addListener("click", () => setSelectedPanoId(point.panoId));
+                    marker.element.addEventListener('click', (e: Event) => {
+                         e.stopPropagation(); 
+                         setSelectedPanoId(point.panoId);
+                    });
+
+                    matchMarkersRef.current.set(point.panoId, marker);
+                }
+            } else {
+                // If status changed back or not found, ensure no match marker exists
+                const existing = matchMarkersRef.current.get(point.panoId);
+                if (existing) {
+                    existing.map = null;
+                    matchMarkersRef.current.delete(point.panoId);
+                }
+            }
+
+            // 2. Update Base Marker (Layer 1) Visuals
+            const baseMarker = resultMarkersRef.current.get(point.panoId);
+            if (baseMarker && baseMarker.content) {
+                updateMarkerVisual(baseMarker.content as HTMLElement, point);
+            }
+        });
+    };
+    
+    syncMatchMarkers();
+  }, [scanPoints, mapInstance]);
+
 
   // --- Auto-Scan Logic for Single Region ---
   const scanSingleRegion = useCallback(async (region: SearchRegion) => {
@@ -875,15 +954,6 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
         addMarkers();
     }
   }, [foundPanos, mapInstance]);
-
-  useEffect(() => {
-      Object.values(scanPoints).forEach((point: ScanPoint) => {
-          const marker = resultMarkersRef.current.get(point.panoId);
-          if (marker && marker.content) {
-              updateMarkerVisual(marker.content as HTMLElement, point);
-          }
-      });
-  }, [scanPoints]);
 
   const updateStreetViewLayer = useCallback(async () => {
     if (!mapInstance) return;
