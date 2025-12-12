@@ -5,9 +5,12 @@ import { ScanPoint, DetectedObject } from '../types';
 interface AnalysisPanelProps {
   point: ScanPoint | null;
   onClose: () => void;
+  // New props for hover interaction
+  onMouseEnter?: () => void;
+  onMouseLeave?: () => void;
 }
 
-export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({ point, onClose }) => {
+export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({ point, onClose, onMouseEnter, onMouseLeave }) => {
   if (!point) return null;
 
   const { status, aiResult, error } = point;
@@ -25,7 +28,11 @@ export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({ point, onClose }) 
   // We use -translate-x-1/2 to center horizontally relative to the pin.
   // We use -translate-y-[calc(100%+20px)] to lift it above the pin (100% height + 20px gap).
   return (
-    <div className="absolute left-0 top-0 transform -translate-x-1/2 -translate-y-[calc(100%+16px)] z-50 animate-in zoom-in-95 fade-in duration-300 origin-bottom">
+    <div 
+      className="absolute left-0 top-0 transform -translate-x-1/2 -translate-y-[calc(100%+16px)] z-50 animate-in zoom-in-95 fade-in duration-300 origin-bottom"
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
+    >
       
       <div className="relative bg-white/70 backdrop-blur-2xl border border-white/50 shadow-[0_8px_32px_0_rgba(31,38,135,0.2)] rounded-2xl w-80 overflow-hidden flex flex-col max-h-[60vh]">
         

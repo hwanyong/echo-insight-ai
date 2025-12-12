@@ -1,4 +1,3 @@
-
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { GoogleMapProps, MapCoordinates, MapLayerType, ScanPoint } from '../types';
@@ -70,10 +69,23 @@ interface MapOverlayProps {
 const MapOverlay: React.FC<MapOverlayProps> = ({ map, position, children }) => {
     const containerRef = useRef(document.createElement('div'));
     const overlayRef = useRef<any>(null);
+    
+    // Create a ref to store the latest position prop.
+    const positionRef = useRef(position);
+
+    // Update the position ref whenever the prop changes
+    useEffect(() => {
+        positionRef.current = position;
+        // Trigger a redraw if the overlay exists
+        if (overlayRef.current) {
+            overlayRef.current.draw();
+        }
+    }, [position]);
 
     useEffect(() => {
         containerRef.current.style.position = 'absolute';
         containerRef.current.style.cursor = 'auto'; // allow clicking inside
+        // containerRef.current.style.pointerEvents = 'none'; // Optional: Let clicks pass through if empty
         
         // Define Custom Overlay Class
         class Overlay extends window.google.maps.OverlayView {
@@ -90,7 +102,10 @@ const MapOverlay: React.FC<MapOverlayProps> = ({ map, position, children }) => {
                 const projection = this.getProjection();
                 if (!projection) return;
                 
-                const point = projection.fromLatLngToDivPixel(new window.google.maps.LatLng(position.lat, position.lng));
+                // CRITICAL FIX: Use positionRef.current to get the FRESH coordinates
+                const currentPos = positionRef.current;
+                const point = projection.fromLatLngToDivPixel(new window.google.maps.LatLng(currentPos.lat, currentPos.lng));
+                
                 if (point) {
                     containerRef.current.style.left = point.x + 'px';
                     containerRef.current.style.top = point.y + 'px';
@@ -115,13 +130,6 @@ const MapOverlay: React.FC<MapOverlayProps> = ({ map, position, children }) => {
             });
         };
     }, [map]);
-
-    // Update position when prop changes
-    useEffect(() => {
-        if (overlayRef.current) {
-            overlayRef.current.draw();
-        }
-    }, [position]);
 
     return createPortal(children, containerRef.current);
 };
@@ -241,6 +249,12 @@ interface FoundPano {
     regionId: string; // Linked to SearchRegion.id
 }
 
+// --- New State Interface for Active Panel ---
+interface ActivePanoState {
+    id: string;
+    locked: boolean; // true = clicked (persistent), false = hovered (transient)
+}
+
 export const GoogleMap: React.FC<GoogleMapProps> = ({
   apiKey,
   initialCenter = DEFAULT_CENTER,
@@ -284,7 +298,16 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
   // UI State
   const [showStats, setShowStats] = useState(false);
   const [isPanoramaActive, setIsPanoramaActive] = useState(false);
-  const [selectedPanoId, setSelectedPanoId] = useState<string | null>(null);
+  
+  // --- New Active Panel Logic ---
+  const [activePano, setActivePano] = useState<ActivePanoState | null>(null);
+  // Ref to access current state inside event listeners
+  const activePanoRef = useRef<ActivePanoState | null>(null);
+  const hoverTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    activePanoRef.current = activePano;
+  }, [activePano]);
 
   // References
   const streetViewLayerRef = useRef<any>(null);
@@ -384,6 +407,58 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
     }
     return { latitude: 0, longitude: 0 };
   };
+
+  // --- Interaction Handlers (Pinned vs Hovered) ---
+
+  // 1. Blue Pin Click: Locks the panel
+  const handlePinClick = useCallback((id: string) => {
+    if (hoverTimeoutRef.current) clearTimeout(hoverTimeoutRef.current);
+    setActivePano({ id, locked: true });
+  }, []);
+
+  // 2. Grid Marker Hover: Opens panel if not locked
+  const handleGridHover = useCallback((id: string) => {
+    if (hoverTimeoutRef.current) {
+        clearTimeout(hoverTimeoutRef.current);
+        hoverTimeoutRef.current = null;
+    }
+    // Do not open if currently locked (User is focusing on a result)
+    if (activePanoRef.current?.locked) return;
+
+    setActivePano({ id, locked: false });
+  }, []);
+
+  // 3. Grid Marker Leave: Starts closing timer
+  const handleGridLeave = useCallback(() => {
+    // Only close if it's not locked
+    if (activePanoRef.current?.locked) return;
+    
+    hoverTimeoutRef.current = setTimeout(() => {
+        setActivePano(null);
+    }, 150); // Small buffer to allow moving to panel
+  }, []);
+
+  // 4. Panel Hover: Cancels closing timer
+  const handlePanelEnter = useCallback(() => {
+    if (hoverTimeoutRef.current) {
+        clearTimeout(hoverTimeoutRef.current);
+        hoverTimeoutRef.current = null;
+    }
+  }, []);
+
+  // 5. Panel Leave: Closes if not locked
+  const handlePanelLeave = useCallback(() => {
+      if (activePanoRef.current?.locked) return;
+      
+      hoverTimeoutRef.current = setTimeout(() => {
+          setActivePano(null);
+      }, 150);
+  }, []);
+
+  // 6. Manual Close
+  const handlePanelClose = useCallback(() => {
+      setActivePano(null);
+  }, []);
 
   // --- User Location Logic ---
   const handleMyLocation = useCallback(() => {
@@ -683,6 +758,10 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
                 const div = document.createElement("div");
                 updateMarkerVisual(div, data); // Set initial visual
                 
+                // Add Hover Listeners for Grid Markers
+                div.addEventListener('mouseenter', () => handleGridHover(data.panoId));
+                div.addEventListener('mouseleave', handleGridLeave);
+                
                 try {
                     marker = new AdvancedMarkerElement({
                         map: mapInstance,
@@ -691,10 +770,13 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
                         title: `Pano: ${data.panoId}`
                     });
                     
-                    marker.addListener("click", () => setSelectedPanoId(data.panoId));
-                    marker.element.addEventListener('click', (e: Event) => {
-                         e.stopPropagation(); 
-                         setSelectedPanoId(data.panoId);
+                    // Grid markers: Click opens panorama directly (if not locked by a blue pin?)
+                    // For now, let's keep click minimal or just same as hover to lock?
+                    // Request said: "Street View Marker: Mouse over to open".
+                    // Let's allow click to just set view if needed, but not lock panel.
+                    marker.addListener("click", () => {
+                         if (activePanoRef.current?.locked) return;
+                         // Optional: Move map?
                     });
                     
                     resultMarkersRef.current.set(data.panoId, marker);
@@ -723,7 +805,7 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
         console.log(`🔌 [Sync] Unsubscribing from Job: ${jobId}`);
         unsubscribe();
     };
-  }, [jobId, mapInstance]);
+  }, [jobId, mapInstance, handleGridHover, handleGridLeave]); // Add Handlers to dependency
 
   // Update Visuals for Base Markers (Grid)
   const updateMarkerVisual = (div: HTMLElement, point: ScanPoint) => {
@@ -791,10 +873,11 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
                         zIndex: 100 // Float above grid
                     });
 
-                    marker.addListener("click", () => setSelectedPanoId(point.panoId));
+                    // Blue Pins: Click to Lock Panel
+                    marker.addListener("click", () => handlePinClick(point.panoId));
                     marker.element.addEventListener('click', (e: Event) => {
                          e.stopPropagation(); 
-                         setSelectedPanoId(point.panoId);
+                         handlePinClick(point.panoId);
                     });
 
                     matchMarkersRef.current.set(point.panoId, marker);
@@ -817,7 +900,7 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
     };
     
     syncMatchMarkers();
-  }, [scanPoints, mapInstance]);
+  }, [scanPoints, mapInstance, handlePinClick]);
 
 
   // --- Auto-Scan Logic for Single Region ---
@@ -894,7 +977,7 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
     setFoundPanos([]);
     setJobId(null);
     setScanPoints({});
-    setSelectedPanoId(null);
+    setActivePano(null);
     clearResultMarkers();
     
     // Clear the ref to allow re-discovery
@@ -997,32 +1080,29 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
                 div.style.height = "12px";
                 div.style.borderRadius = "50%";
                 div.style.cursor = "pointer";
+                
+                // --- Add Hover Listeners for new grid points ---
+                div.addEventListener('mouseenter', () => handleGridHover(pt.panoId));
+                div.addEventListener('mouseleave', handleGridLeave);
+
                 const marker = new AdvancedMarkerElement({
                     map: mapInstance,
                     position: pt, 
                     content: div,
                     title: `Pano: ${pt.panoId}`
                 });
+                
                 marker.addListener("click", () => {
-                    if (resultMarkersRef.current.size > 0 && document.getElementsByClassName('marker-safe').length > 0) {
-                        setSelectedPanoId(pt.panoId);
-                    } else {
-                        const panorama = mapInstance.getStreetView();
-                        panorama.setPano(pt.panoId);
-                        panorama.setPov({ heading: 0, pitch: 0 });
-                        panorama.setVisible(true);
-                    }
+                     // Click acts same as hover for grid? Or ignored?
+                     // Currently kept neutral
                 });
-                marker.element.addEventListener('click', (e: Event) => {
-                   e.stopPropagation(); 
-                   setSelectedPanoId(pt.panoId);
-                });
+                
                 resultMarkersRef.current.set(pt.panoId, marker);
             });
         };
         addMarkers();
     }
-  }, [foundPanos, mapInstance]);
+  }, [foundPanos, mapInstance, handleGridHover, handleGridLeave]);
 
   const updateStreetViewLayer = useCallback(async () => {
     if (!mapInstance) return;
@@ -1507,17 +1587,19 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
             </div>
             
             {/* Analysis Panel - Now rendered as a Map Overlay attached to the pin */}
-            {selectedPanoId && scanPoints[selectedPanoId] && (
+            {activePano && scanPoints[activePano.id] && (
                 <MapOverlay 
                     map={mapInstance} 
                     position={{ 
-                        lat: scanPoints[selectedPanoId].location.latitude, 
-                        lng: scanPoints[selectedPanoId].location.longitude 
+                        lat: scanPoints[activePano.id].location.latitude, 
+                        lng: scanPoints[activePano.id].location.longitude 
                     }}
                 >
                     <AnalysisPanel 
-                        point={scanPoints[selectedPanoId]} 
-                        onClose={() => setSelectedPanoId(null)} 
+                        point={scanPoints[activePano.id]} 
+                        onClose={handlePanelClose} 
+                        onMouseEnter={handlePanelEnter}
+                        onMouseLeave={handlePanelLeave}
                     />
                 </MapOverlay>
             )}
