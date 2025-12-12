@@ -29,58 +29,47 @@ export type MapLayerType = 'none' | 'street';
 export interface ScanJob {
   jobId: string;
   status: 'uploading' | 'processing' | 'completed' | 'failed';
+  // New generic search query structure
+  searchQuery?: {
+    text: string;
+    imageRef?: string;
+  };
   totalPoints: number;
   createdAt: any; // FirebaseFirestore.Timestamp
 }
 
-export interface DetectedPole {
-  pole_id: string;
-  source_heading: number;
-  spatial_analysis: {
-    position_in_image: string;
-    estimated_distance_m: number;
-    relative_bearing_deg: number;
-    absolute_bearing_deg: number;
-    estimated_coordinates: {
+// Generic Object for Visual Search
+export interface DetectedObject {
+  id: string;
+  label: string;       // e.g. "Red Fire Hydrant", "Starbucks Logo"
+  confidence: number;  // 0.0 to 1.0
+  description?: string; // AI generated description
+  spatial?: {
+    heading: number;   // 0-360 relative to north
+    distance: number;  // meters
+    location?: {
       lat: number;
-      lon: number;
+      lng: number;
     };
   };
-  asset_attributes: {
-    material: string;
-    configuration: string;
-    transformers: number;
-  };
-  risk_analysis: {
-    ORI_score: number;
-    DSI_score: number;
-    risk_grade: string; // 'High', 'Medium', 'Low'
-    lean_direction: string;
-  };
+  // Optional crop image of the found object
+  image_crop_url?: string;
 }
 
 export interface AiResult {
-  // Legacy / Nested Schema
-  meta_info?: {
-    total_poles_detected: number;
-  };
-  detected_poles?: DetectedPole[];
-
-  // Flattened Schema (observed in logs)
-  census_success?: boolean;
-  total_pole_count?: number;
-  poles?: DetectedPole[];
-  pole_list?: DetectedPole[]; // Fallback
+  // Generic Visual Search Schema
+  summary?: string; 
+  detected_objects?: DetectedObject[];
   
-  // Census V4 fields
-  description?: string;
-  pole_density_level?: string;
+  // Legacy support fields (optional, for backward compatibility if needed)
+  total_count?: number; 
 }
 
 export interface ScanPoint {
   panoId: string;
   status: 'ready' | 'analyzing' | 'done' | 'error';
   location: { latitude: number; longitude: number };
+  heading?: number; // Car heading
   aiResult?: AiResult;
   error?: string;
 }

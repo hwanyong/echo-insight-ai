@@ -392,15 +392,23 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
         if (raw.status === 'done' || raw.status === 'completed') status = 'done';
         else if (raw.status === 'error' || raw.status === 'failed') status = 'error';
         else if (raw.status && raw.status.includes('analyzing')) status = 'analyzing';
-        const aiResult = raw.aiResult || raw.aiResultRaw || (raw.poleCount !== undefined ? {
-            total_pole_count: raw.poleCount,
-            description: raw.censusDescription || raw.description || raw.aiResponseText
-        } : undefined);
+        
+        // Flexible Mapping for Generic Visual Search
+        const aiResultRaw = raw.aiResult || raw.aiResultRaw;
+        
+        // Check for detected objects array (New Generic Schema)
+        const detectedObjects = aiResultRaw?.detected_objects || aiResultRaw?.poles || [];
+        
         const data: ScanPoint = {
             panoId: raw.panoId,
             status: status,
             location: { latitude: raw.location?.latitude || 0, longitude: raw.location?.longitude || 0 },
-            aiResult: aiResult,
+            heading: raw.heading || 0,
+            aiResult: {
+                summary: aiResultRaw?.summary || aiResultRaw?.description,
+                detected_objects: detectedObjects,
+                total_count: detectedObjects.length
+            },
             error: raw.error
         };
         updates[data.panoId] = data;
@@ -421,15 +429,22 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
     div.style.borderRadius = "50%";
     div.style.cursor = "pointer";
     div.style.transition = "all 0.3s ease";
+
+    // Visual State Logic for General Object Search
     if (point.status === 'analyzing') {
         div.classList.add('marker-analyzing');
     } else if (point.status === 'done') {
-        const detected = point.aiResult?.detected_poles || point.aiResult?.poles || [];
-        const poleCount = point.aiResult?.total_pole_count ?? 0;
-        const highRisk = detected.some(p => p.risk_analysis.risk_grade === 'High');
-        if (poleCount === 0) div.classList.add('marker-empty');
-        else if (highRisk) div.classList.add('marker-risk');
-        else div.classList.add('marker-safe');
+        const foundCount = point.aiResult?.detected_objects?.length || 0;
+        
+        if (foundCount === 0) {
+             div.classList.add('marker-empty');
+        } else {
+             // Found Something -> Use Green/Blue (formerly Safe) style logic, or specific 'found' logic
+             // Reusing 'marker-safe' class but logically it means 'Found Object'
+             div.classList.add('marker-safe');
+             div.style.backgroundColor = "#3b82f6"; // Blue 500 for found
+             div.style.borderColor = "#93c5fd";
+        }
     } else if (point.status === 'error') {
         div.style.backgroundColor = "#64748b"; 
     } else {
@@ -617,7 +632,7 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
                     title: `Pano: ${pt.panoId}`
                 });
                 marker.addListener("click", () => {
-                    if (resultMarkersRef.current.size > 0 && document.getElementsByClassName('marker-risk').length > 0) {
+                    if (resultMarkersRef.current.size > 0 && document.getElementsByClassName('marker-safe').length > 0) {
                         setSelectedPanoId(pt.panoId);
                     } else {
                         const panorama = mapInstance.getStreetView();
