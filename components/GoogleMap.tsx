@@ -286,7 +286,10 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [showKeyInput, setShowKeyInput] = useState(false);
   const [manualKey, setManualKey] = useState('');
+  
+  // State for search queries
   const [searchQuery, setSearchQuery] = useState('');
+  const [activeQuery, setActiveQuery] = useState('');
   
   // Search Mode State
   const [searchMode, setSearchMode] = useState<'places' | 'vision'>('places');
@@ -548,6 +551,27 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
     }
   };
 
+  const handlePaste = (e: React.ClipboardEvent) => {
+    if (searchMode !== 'vision') return;
+    const items = e.clipboardData.items;
+    const newImages: UploadedImage[] = [];
+    for (let i = 0; i < items.length; i++) {
+        if (items[i].type.indexOf('image') !== -1) {
+            const file = items[i].getAsFile();
+            if (file) {
+                newImages.push({
+                    id: Math.random().toString(36).substr(2, 9),
+                    file: file,
+                    previewUrl: URL.createObjectURL(file)
+                });
+            }
+        }
+    }
+    if (newImages.length > 0) {
+        setUploadedImages(prev => [...prev, ...newImages]);
+    }
+  };
+
   const removeImage = (id: string) => {
       setUploadedImages(prev => prev.filter(img => img.id !== id));
   };
@@ -643,7 +667,7 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
 
         const payload = {
             searchContext: {
-                queryText: searchQuery,
+                queryText: activeQuery || searchQuery, // Use active query if set
                 queryImages: validQueryImages, // Changed from uploadedImages.map(img => img.previewUrl)
                 searchMode: searchMode,
                 timestamp: new Date().toISOString()
@@ -1570,15 +1594,7 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
           <>
             <Sidebar isHidden={isPanoramaActive} user={user} authError={authError} />
 
-            <div className="absolute top-4 right-4 flex flex-col gap-2 z-30">
-                <button
-                    onClick={() => setShowStats(true)}
-                    className="p-3 bg-white/40 text-slate-700 rounded-full shadow-[0_8px_32px_0_rgba(31,38,135,0.15)] hover:bg-white/60 hover:text-blue-600 transition-all backdrop-blur-md border border-white/50"
-                    title="Show Stats"
-                >
-                   <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" /></svg>
-                </button>
-            </div>
+            {/* Removed the stats button div from here */}
             
             {/* My Location FAB - Adjusted for better visibility and Z-Index */}
             <div className="absolute bottom-36 right-4 flex flex-col gap-3 z-50">
@@ -1804,6 +1820,7 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
                     placeholder={searchMode === 'places' ? "Search city or address..." : (searchRegions.length > 0 ? `Search in ${searchRegions.length} areas...` : "Describe what to find...")}
                     value={searchQuery}
                     onChange={handleSearchInput}
+                    onPaste={handlePaste} // Support image pasting from clipboard
                     onKeyDown={(e) => {
                         if (e.key === 'Enter') {
                             if (searchMode === 'places') {
@@ -1829,7 +1846,10 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
                                     });
                                 }
                             } else {
+                                // Vision Mode: Store query and clear input
+                                setActiveQuery(searchQuery);
                                 performMultiRegionSearch();
+                                setSearchQuery('');
                             }
                         }
                     }}
@@ -1837,7 +1857,16 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
 
                 <div className="pr-2 flex items-center z-10">
                     <button 
-                        onClick={performMultiRegionSearch}
+                        onClick={() => {
+                            if (searchMode === 'places') {
+                                performMultiRegionSearch();
+                            } else {
+                                // Vision Mode: Store query and clear input
+                                setActiveQuery(searchQuery);
+                                performMultiRegionSearch();
+                                setSearchQuery('');
+                            }
+                        }}
                         className={`p-2 rounded-full text-white transition-all duration-300 shadow-lg flex items-center justify-center hover:scale-110 active:scale-90 backdrop-blur-sm ${searchMode === 'places' ? 'bg-blue-600/90 hover:bg-blue-700 shadow-blue-500/30' : 'bg-violet-600/90 hover:bg-violet-700 shadow-violet-500/30'}`}
                     >
                         {searchMode === 'places' ? (
