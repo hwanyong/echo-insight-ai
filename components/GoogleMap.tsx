@@ -269,6 +269,42 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
       return REGION_COLORS[Math.floor(Math.random() * REGION_COLORS.length)];
   };
 
+  // Helper: Parse Firestore Location which might be string or object
+  const parseFirestoreLocation = (loc: any): { latitude: number, longitude: number } => {
+    if (!loc) return { latitude: 0, longitude: 0 };
+    // Case 1: Already an object
+    if (typeof loc === 'object' && 'latitude' in loc && 'longitude' in loc) {
+        return { latitude: Number(loc.latitude), longitude: Number(loc.longitude) };
+    }
+    // Case 2: String format "[49.247... N, 122.889... W]"
+    if (typeof loc === 'string') {
+        try {
+            // Remove brackets and split
+            const clean = loc.replace(/[\[\]]/g, '');
+            const parts = clean.split(',');
+            
+            let lat = 0;
+            let lng = 0;
+
+            parts.forEach((p: string) => {
+                const trimmed = p.trim();
+                if (trimmed.endsWith('N')) lat = parseFloat(trimmed.replace('N', ''));
+                else if (trimmed.endsWith('S')) lat = -parseFloat(trimmed.replace('S', ''));
+                
+                if (trimmed.endsWith('E')) lng = parseFloat(trimmed.replace('E', ''));
+                else if (trimmed.endsWith('W')) lng = -parseFloat(trimmed.replace('W', ''));
+            });
+
+            if (!isNaN(lat) && !isNaN(lng)) {
+                return { latitude: lat, longitude: lng };
+            }
+        } catch (e) {
+            console.error("Error parsing location string:", loc, e);
+        }
+    }
+    return { latitude: 0, longitude: 0 };
+  };
+
   // --- User Location Logic ---
   const handleMyLocation = useCallback(() => {
     if (!mapInstance || !navigator.geolocation) return;
@@ -421,9 +457,6 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
         const payload = {
             searchContext: {
                 queryText: searchQuery,
-                // Note: For real file uploads, we should upload to Storage and pass URLs.
-                // For this prototype, we're assuming the preview URL or passing a placeholder.
-                // In a production app, handleImageUpload would upload to Firebase Storage first.
                 queryImages: uploadedImages.map(img => img.previewUrl), 
                 searchMode: searchMode,
                 timestamp: new Date().toISOString()
@@ -460,19 +493,53 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
 
   // Effect: Subscribe to Firestore when JobID is present
   useEffect(() => {
-    if (!jobId) return;
+    if (!jobId) {
+        console.log("🚫 [Sync] No active Job ID.");
+        return;
+    }
+    
+    console.log(`🔗 [Sync] Subscribing to Job: ${jobId}`);
     const q = collection(db, 'scan_jobs', jobId, 'scan_points');
-    const unsubscribe = onSnapshot(q, (snapshot: any) => {
+    
+    const unsubscribe = onSnapshot(q, async (snapshot: any) => {
+      console.log(`📦 [Sync] Snapshot received. Docs: ${snapshot.size}, Empty: ${snapshot.empty}`);
+      
       const updates: Record<string, ScanPoint> = {};
-      snapshot.docChanges().forEach((change: any) => {
+      
+      // Lazy load AdvancedMarkerElement for restoration if needed
+      let AdvancedMarkerElement: any = null;
+      if (!resultMarkersRef.current.size && !snapshot.empty) {
+         if (window.google?.maps?.importLibrary) {
+             const lib = await window.google.maps.importLibrary("marker");
+             AdvancedMarkerElement = lib.AdvancedMarkerElement;
+         } else {
+             AdvancedMarkerElement = window.google.maps.marker?.AdvancedMarkerElement;
+         }
+      }
+
+      // Iterate through changes to be efficient
+      snapshot.docChanges().forEach(async (change: any) => {
         const raw = change.doc.data();
+        const docId = change.doc.id;
+        const type = change.type; // added, modified, removed
+        
+        console.log(`📄 [Sync] Change [${type}] ID: ${docId}`, raw);
+
+        // 1. Status Mapping
         let status: ScanPoint['status'] = 'ready';
         if (raw.status === 'done' || raw.status === 'completed') status = 'done';
         else if (raw.status === 'error' || raw.status === 'failed') status = 'error';
         else if (raw.status && raw.status.includes('analyzing')) status = 'analyzing';
         
-        // Flexible Mapping for Generic Visual Search
-        const aiResultRaw = raw.aiResult || raw.aiResultRaw;
+        // 2. Location Parsing (Fix for string coordinates)
+        const location = parseFirestoreLocation(raw.location);
+        if (location.latitude === 0 && location.longitude === 0) {
+            console.warn(`⚠️ [Sync] Invalid location for ${docId}:`, raw.location);
+        }
+
+        // 3. AI Result Normalization
+        // Update: Included `raw.visionResult` to support new Vision Search data structure
+        const aiResultRaw = raw.visionResult || raw.aiResult || raw.aiResultRaw;
         
         // ADAPTER: Handle "Flat" JSON from logs if "detected_objects" is missing
         let detectedObjects = aiResultRaw?.detected_objects || aiResultRaw?.poles || [];
@@ -484,9 +551,9 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
              // Create a synthetic object so the UI treats it as "Found"
              detectedObjects = [{
                  id: 'legacy-match',
-                 label: aiResultRaw.matched_keywords?.[0] || 'Object',
-                 confidence: (aiResultRaw.confidence_score || 0) / 100,
-                 description: aiResultRaw.description,
+                 label: aiResultRaw?.matched_keywords?.[0] || 'Object',
+                 confidence: (aiResultRaw?.confidence_score || 0) / 100,
+                 description: aiResultRaw?.description,
                  spatial: {
                      heading: 0,
                      distance: 0
@@ -495,9 +562,9 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
         }
         
         const data: ScanPoint = {
-            panoId: raw.panoId,
+            panoId: raw.panoId || docId,
             status: status,
-            location: { latitude: raw.location?.latitude || 0, longitude: raw.location?.longitude || 0 },
+            location: location,
             heading: raw.heading || 0,
             aiResult: {
                 summary: aiResultRaw?.summary || aiResultRaw?.description,
@@ -506,21 +573,79 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
             },
             error: raw.error
         };
+
         updates[data.panoId] = data;
-        const marker = resultMarkersRef.current.get(data.panoId);
-        if (marker && marker.content) {
-            updateMarkerVisual(marker.content as HTMLElement, data);
+
+        // 4. Marker Restore/Update Logic
+        let marker = resultMarkersRef.current.get(data.panoId);
+        
+        // If marker is missing (e.g. after refresh), create it
+        if (!marker) {
+            console.log(`✨ [Sync] Creating MISSING marker for ${data.panoId} at`, location);
+            
+            // Re-check lib import in case loop didn't catch it
+            if (!AdvancedMarkerElement && window.google?.maps?.importLibrary) {
+                const lib = await window.google.maps.importLibrary("marker");
+                AdvancedMarkerElement = lib.AdvancedMarkerElement;
+            } else if (!AdvancedMarkerElement) {
+                AdvancedMarkerElement = window.google.maps.marker?.AdvancedMarkerElement;
+            }
+
+            if (AdvancedMarkerElement && mapInstance) {
+                const div = document.createElement("div");
+                updateMarkerVisual(div, data); // Set initial visual
+                
+                try {
+                    marker = new AdvancedMarkerElement({
+                        map: mapInstance,
+                        position: { lat: location.latitude, lng: location.longitude },
+                        content: div,
+                        title: `Pano: ${data.panoId}`
+                    });
+                    
+                    marker.addListener("click", () => setSelectedPanoId(data.panoId));
+                    marker.element.addEventListener('click', (e: Event) => {
+                         e.stopPropagation(); 
+                         setSelectedPanoId(data.panoId);
+                    });
+                    
+                    resultMarkersRef.current.set(data.panoId, marker);
+                } catch (e) {
+                    console.error("Error creating marker", e);
+                }
+            }
+        } else {
+             // Update existing marker visual
+             console.log(`🎨 [Sync] Updating visual for ${data.panoId}`);
+             if (marker.content) {
+                updateMarkerVisual(marker.content as HTMLElement, data);
+             }
+             // Update position if it was 0,0 or changed
+             if (marker.position && (marker.position.lat !== location.latitude || marker.position.lng !== location.longitude)) {
+                 console.log(`📍 [Sync] Correcting marker position for ${data.panoId}`);
+                 marker.position = { lat: location.latitude, lng: location.longitude };
+             }
         }
       });
-      setScanPoints(prev => ({ ...prev, ...updates }));
+      
+      setScanPoints(prev => {
+          console.log(`📊 [Sync] State updated. Previous count: ${Object.keys(prev).length}, New Updates: ${Object.keys(updates).length}`);
+          return { ...prev, ...updates };
+      });
+    }, (err) => {
+        console.error("🔥 [Sync] Snapshot Listener Error:", err);
     });
-    return () => unsubscribe();
-  }, [jobId]);
+    
+    return () => {
+        console.log(`🔌 [Sync] Unsubscribing from Job: ${jobId}`);
+        unsubscribe();
+    };
+  }, [jobId, mapInstance]);
 
   const updateMarkerVisual = (div: HTMLElement, point: ScanPoint) => {
     div.className = "marker-glass";
-    div.style.width = "10px";
-    div.style.height = "10px";
+    div.style.width = "12px";
+    div.style.height = "12px";
     div.style.borderRadius = "50%";
     div.style.cursor = "pointer";
     div.style.transition = "all 0.3s ease";
@@ -720,8 +845,8 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
                 const div = document.createElement("div");
                 div.className = "marker-glass"; 
                 div.style.backgroundColor = "#8b5cf6"; 
-                div.style.width = "10px";
-                div.style.height = "10px";
+                div.style.width = "12px";
+                div.style.height = "12px";
                 div.style.borderRadius = "50%";
                 div.style.cursor = "pointer";
                 const marker = new AdvancedMarkerElement({
