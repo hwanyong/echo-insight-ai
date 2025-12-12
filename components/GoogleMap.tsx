@@ -9,9 +9,23 @@ const DEFAULT_CENTER: MapCoordinates = { lat: 37.5665, lng: 126.9780 }; // Seoul
 const DEFAULT_ZOOM = 11;
 
 // --- PRICING CONSTANTS (USD) ---
-const PRICE_STATIC_IMAGE = 0.007; // $7.00 per 1000 requests
-const PRICE_DYNAMIC_VIEW = 0.014; // $14.00 per 1000 requests
-const MONTHLY_FREE_CREDIT = 200.0; // Google Cloud Free Tier
+const PRICE_STATIC_IMAGE = 0.007; 
+const PRICE_DYNAMIC_VIEW = 0.014; 
+const MONTHLY_FREE_CREDIT = 200.0;
+
+// Vibrant colors for regions
+const REGION_COLORS = [
+  "#ef4444", // red
+  "#f97316", // orange
+  "#f59e0b", // amber
+  "#84cc16", // lime
+  "#10b981", // emerald
+  "#06b6d4", // cyan
+  "#3b82f6", // blue
+  "#8b5cf6", // violet
+  "#d946ef", // fuchsia
+  "#f43f5e", // rose
+];
 
 // "Clean Paper" / Light Glass Map Style
 const GLASS_MAP_STYLES = [
@@ -91,11 +105,8 @@ interface PricingStatsModalProps {
 const PricingStatsModal: React.FC<PricingStatsModalProps> = ({ count, onClose }) => {
   const estStaticCost = count * PRICE_STATIC_IMAGE;
   const estDynamicCost = count * PRICE_DYNAMIC_VIEW;
-  // Calculate percentage relative to $200 free credit
   const freeTierUsedPercent = (estStaticCost / MONTHLY_FREE_CREDIT) * 100;
-  // Cap visual bar at 100%
   const barWidth = Math.min(freeTierUsedPercent, 100); 
-  // Ensure a tiny sliver is shown if value is > 0 but very small
   const finalWidth = count > 0 && barWidth < 1 ? 1 : barWidth;
 
   return (
@@ -104,8 +115,6 @@ const PricingStatsModal: React.FC<PricingStatsModalProps> = ({ count, onClose })
         <h3 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
           <span className="text-xl">📊</span> Cost Estimator
         </h3>
-        
-        {/* Session Summary */}
         <div className="mb-6 p-4 bg-slate-50 rounded-xl border border-slate-100">
            <div className="flex justify-between mb-2">
              <span className="text-sm text-slate-500">Locations Found</span>
@@ -116,10 +125,7 @@ const PricingStatsModal: React.FC<PricingStatsModalProps> = ({ count, onClose })
              <span className="text-sm font-bold text-green-600">$0.00</span>
            </div>
         </div>
-
-        {/* Projections */}
         <h4 className="text-[10px] font-bold text-slate-400 uppercase mb-3 tracking-wider">Projected Costs (If consumed)</h4>
-        
         <div className="space-y-3 mb-6">
           <div className="flex justify-between items-center group">
             <span className="text-sm text-slate-600 group-hover:text-slate-900 transition-colors">Static Images (Download)</span>
@@ -130,8 +136,6 @@ const PricingStatsModal: React.FC<PricingStatsModalProps> = ({ count, onClose })
              <span className="text-sm font-mono text-slate-800 bg-slate-100 px-2 py-0.5 rounded">${estDynamicCost.toFixed(2)}</span>
           </div>
         </div>
-
-        {/* Free Tier Context */}
         <div className="mb-6">
           <div className="flex justify-between text-xs mb-1">
              <span className="text-slate-500">Monthly Free Credit Impact ($200)</span>
@@ -148,7 +152,6 @@ const PricingStatsModal: React.FC<PricingStatsModalProps> = ({ count, onClose })
             Current metadata search is free.
           </p>
         </div>
-
         <button 
           onClick={onClose}
           className="w-full py-3 bg-slate-900 hover:bg-black text-white rounded-xl font-medium transition-colors shadow-lg"
@@ -165,6 +168,15 @@ interface UploadedImage {
     id: string;
     file: File;
     previewUrl: string;
+}
+
+// Region Interface for Selection
+interface SearchRegion {
+    id: string;
+    bounds: { north: number, south: number, east: number, west: number };
+    center: { lat: number, lng: number };
+    label: string;
+    color: string;
 }
 
 export const GoogleMap: React.FC<GoogleMapProps> = ({
@@ -187,16 +199,16 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [uploadedImages, setUploadedImages] = useState<UploadedImage[]>([]);
 
+  // Region Selection State
+  const [searchRegions, setSearchRegions] = useState<SearchRegion[]>([]);
+  const [isRegionSelectMode, setIsRegionSelectMode] = useState(false);
+
   // Layer State
   const [activeLayer, setActiveLayer] = useState<MapLayerType>('none');
   const [layerLoading, setLayerLoading] = useState(false);
   
-  // Drawing State
-  const [isDrawingMode, setIsDrawingMode] = useState(false);
-
   // Search & Job State
   const [searchStatus, setSearchStatus] = useState<{ processed: number; total: number } | null>(null);
-  // Added heading to the foundPanos state type definition
   const [foundPanos, setFoundPanos] = useState<Array<{ lat: number; lng: number; panoId: string; heading: number }>>([]);
   const [isSaving, setIsSaving] = useState(false);
   const [jobId, setJobId] = useState<string | null>(null);
@@ -210,9 +222,12 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
   // References
   const streetViewLayerRef = useRef<any>(null);
   const mapClickListenerRef = useRef<any>(null);
-  const selectionRectRef = useRef<any>(null);
+  
+  // Ref to track overlays (rectangles + markers) to sync with state
+  // Updated type to store multiple markers per region
+  const regionOverlaysRef = useRef<Map<string, { rect: any, labelMarker: any, closeMarker: any }>>(new Map());
   const drawingListenersRef = useRef<any[]>([]);
-  const resultMarkersRef = useRef<Map<string, any>>(new Map()); // Map panoId to Marker instance
+  const resultMarkersRef = useRef<Map<string, any>>(new Map());
 
   // --- Validation Log ---
   useEffect(() => {
@@ -226,25 +241,15 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
   // --- Helpers ---
   
   const clearLayers = useCallback(() => {
-    // Clear Street View Coverage
     if (streetViewLayerRef.current) {
       streetViewLayerRef.current.setMap(null);
       streetViewLayerRef.current = null;
     }
-
-    // Remove Map Click Listeners (used for Street View)
     if (mapClickListenerRef.current) {
         window.google.maps.event.removeListener(mapClickListenerRef.current);
         mapClickListenerRef.current = null;
     }
   }, [mapInstance]);
-
-  const clearSelection = useCallback(() => {
-    if (selectionRectRef.current) {
-      selectionRectRef.current.setMap(null);
-      selectionRectRef.current = null;
-    }
-  }, []);
 
   const clearResultMarkers = useCallback(() => {
     resultMarkersRef.current.forEach((marker) => {
@@ -252,6 +257,10 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
     });
     resultMarkersRef.current.clear();
   }, []);
+
+  const getRandomColor = () => {
+      return REGION_COLORS[Math.floor(Math.random() * REGION_COLORS.length)];
+  };
 
   // --- Image Upload Logic ---
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -269,50 +278,44 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
       setUploadedImages(prev => prev.filter(img => img.id !== id));
   };
 
+  // --- Region Logic ---
+  const removeRegion = useCallback((id: string) => {
+      setSearchRegions(prev => prev.filter(r => r.id !== id));
+  }, []);
+
+  const focusRegion = (center: { lat: number; lng: number }) => {
+      if(mapInstance) {
+          mapInstance.panTo(center);
+          mapInstance.setZoom(15);
+      }
+  }
 
   // --- Server Upload & Realtime Sync Logic ---
-
   const handleSaveToServer = async () => {
     if (foundPanos.length === 0) return;
     setIsSaving(true);
-
     try {
         const uploadScanData = httpsCallable(functions, 'uploadScanData');
-        
-        // Calculate center of the scanned area
         const lats = foundPanos.map(p => p.lat);
         const lngs = foundPanos.map(p => p.lng);
         const minLat = Math.min(...lats);
         const maxLat = Math.max(...lats);
         const minLng = Math.min(...lngs);
         const maxLng = Math.max(...lngs);
-
         const centerLat = (minLat + maxLat) / 2;
         const centerLng = (minLng + maxLng) / 2;
-
-        // Transform data to match server requirements
-        // Server expects: { panoId, location: { latitude, longitude }, heading }
         const scanPointsPayload = foundPanos.map(p => ({
             panoId: p.panoId,
-            location: {
-                latitude: p.lat,
-                longitude: p.lng
-            },
-            heading: p.heading // Ensure numeric heading is sent
+            location: { latitude: p.lat, longitude: p.lng },
+            heading: p.heading 
         }));
-
         const response: any = await uploadScanData({
-          region: { 
-            latitude: centerLat,
-            longitude: centerLng
-          },
+          region: { latitude: centerLat, longitude: centerLng },
           scanPoints: scanPointsPayload
         });
-        
         const newJobId = response.data.jobId;
         console.log("Job Created:", newJobId);
         setJobId(newJobId);
-
     } catch (err: any) {
         console.error(err);
         alert(`Failed to upload: ${err.message}`);
@@ -324,142 +327,94 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
   // Effect: Subscribe to Firestore when JobID is present
   useEffect(() => {
     if (!jobId) return;
-
-    console.log("Listening for updates on Job:", jobId);
-    
-    // Subscribe to the scan_points subcollection
     const q = collection(db, 'scan_jobs', jobId, 'scan_points');
     const unsubscribe = onSnapshot(q, (snapshot: any) => {
       const updates: Record<string, ScanPoint> = {};
-      
       snapshot.docChanges().forEach((change: any) => {
         const raw = change.doc.data();
-        
-        // --- NORMALIZE DATA START ---
-        // Map raw Firestore data to internal ScanPoint type
-        // 1. Map status: Handle 'analyzing_census_v4' -> 'analyzing'
         let status: ScanPoint['status'] = 'ready';
         if (raw.status === 'done' || raw.status === 'completed') status = 'done';
         else if (raw.status === 'error' || raw.status === 'failed') status = 'error';
         else if (raw.status && raw.status.includes('analyzing')) status = 'analyzing';
-        
-        // 2. Map aiResult: Support aiResultRaw (flat) -> aiResult (nested expectation)
-        // If aiResultRaw exists but aiResult doesn't, use aiResultRaw.
-        // Also fallback to constructing one if top-level fields exist.
         const aiResult = raw.aiResult || raw.aiResultRaw || (raw.poleCount !== undefined ? {
             total_pole_count: raw.poleCount,
             description: raw.censusDescription || raw.description || raw.aiResponseText
         } : undefined);
-
         const data: ScanPoint = {
             panoId: raw.panoId,
             status: status,
-            location: {
-                latitude: raw.location?.latitude || 0,
-                longitude: raw.location?.longitude || 0
-            },
+            location: { latitude: raw.location?.latitude || 0, longitude: raw.location?.longitude || 0 },
             aiResult: aiResult,
             error: raw.error
         };
-        // --- NORMALIZE DATA END ---
-
-        console.log(`[Firestore] Normalized ${data.panoId}`, {
-           originalStatus: raw.status,
-           newStatus: data.status,
-           hasResult: !!data.aiResult,
-           poleCount: data.aiResult?.total_pole_count
-        });
-
         updates[data.panoId] = data;
-        
-        // Update marker visual immediately if possible
         const marker = resultMarkersRef.current.get(data.panoId);
         if (marker && marker.content) {
             updateMarkerVisual(marker.content as HTMLElement, data);
         }
       });
-      
       setScanPoints(prev => ({ ...prev, ...updates }));
     });
-
     return () => unsubscribe();
   }, [jobId]);
 
-  // Helper to update marker style based on state
   const updateMarkerVisual = (div: HTMLElement, point: ScanPoint) => {
-    // Reset classes
     div.className = "marker-glass";
-    
-    // Base styles
     div.style.width = "10px";
     div.style.height = "10px";
     div.style.borderRadius = "50%";
     div.style.cursor = "pointer";
     div.style.transition = "all 0.3s ease";
-    
     if (point.status === 'analyzing') {
         div.classList.add('marker-analyzing');
     } else if (point.status === 'done') {
         const detected = point.aiResult?.detected_poles || point.aiResult?.poles || [];
         const poleCount = point.aiResult?.total_pole_count ?? 0;
         const highRisk = detected.some(p => p.risk_analysis.risk_grade === 'High');
-        
-        if (poleCount === 0) {
-           div.classList.add('marker-empty');
-        } else if (highRisk) {
-           div.classList.add('marker-risk');
-        } else {
-           div.classList.add('marker-safe');
-        }
+        if (poleCount === 0) div.classList.add('marker-empty');
+        else if (highRisk) div.classList.add('marker-risk');
+        else div.classList.add('marker-safe');
     } else if (point.status === 'error') {
-        div.style.backgroundColor = "#64748b"; // slate-500
+        div.style.backgroundColor = "#64748b"; 
     } else {
-        // Ready
-        div.style.backgroundColor = "#8b5cf6"; // violet-500
+        div.style.backgroundColor = "#8b5cf6"; 
     }
   };
 
-
-  // --- Search Logic ---
-
-  const performGridSearch = useCallback(async (bounds: any) => {
-    if (!mapInstance) return;
-
-    const ne = bounds.getNorthEast();
-    const sw = bounds.getSouthWest();
-    const latSpan = ne.lat() - sw.lat();
-    const lngSpan = ne.lng() - sw.lng();
-
-    if (latSpan > 0.05 || lngSpan > 0.05) {
-        alert("Area is too large. Please select a smaller region.");
+  // --- Search Logic (Multi-Region) ---
+  const performMultiRegionSearch = useCallback(async () => {
+    if (!mapInstance || searchRegions.length === 0) {
+        if(searchMode === 'vision') alert("Please select at least one area.");
         return;
     }
-
-    const step = 0.0002; 
-    const gridPoints: { lat: number; lng: number }[] = [];
-
-    for (let lat = sw.lat(); lat < ne.lat(); lat += step) {
-        for (let lng = sw.lng(); lng < ne.lng(); lng += step) {
-            gridPoints.push({ lat, lng });
-        }
-    }
-
-    if (gridPoints.length === 0) return;
-
-    const MAX_POINTS = 500;
-    const finalPoints = gridPoints.length > MAX_POINTS ? gridPoints.slice(0, MAX_POINTS) : gridPoints;
-
-    setSearchStatus({ processed: 0, total: finalPoints.length });
+    setSearchStatus({ processed: 0, total: 0 }); 
     setFoundPanos([]);
-    setJobId(null); // Reset current job
+    setJobId(null);
     setScanPoints({});
     setSelectedPanoId(null);
     clearResultMarkers();
 
     const svService = new window.google.maps.StreetViewService();
     const seenPanos = new Set<string>();
-    const BATCH_SIZE = 5;
-    const DELAY_MS = 100;
+    const allGridPoints: { lat: number; lng: number }[] = [];
+    const step = 0.0002; 
+
+    searchRegions.forEach(region => {
+        const { north, south, east, west } = region.bounds;
+        for (let lat = south; lat < north; lat += step) {
+            for (let lng = west; lng < east; lng += step) {
+                allGridPoints.push({ lat, lng });
+            }
+        }
+    });
+
+    if (allGridPoints.length === 0) return;
+    const MAX_POINTS = 1000;
+    const finalPoints = allGridPoints.length > MAX_POINTS ? allGridPoints.slice(0, MAX_POINTS) : allGridPoints;
+    setSearchStatus({ processed: 0, total: finalPoints.length });
+
+    const BATCH_SIZE = 10;
+    const DELAY_MS = 50;
     let currentIndex = 0;
 
     const processBatch = async () => {
@@ -467,18 +422,12 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
             setSearchStatus(null);
             return;
         }
-
         const batch = finalPoints.slice(currentIndex, currentIndex + BATCH_SIZE);
-        
         const promises = batch.map((point) => new Promise<void>((resolve) => {
             svService.getPanorama({ location: point, radius: 40 }, (data: any, status: any) => {
                 if (status === 'OK' && data.location && data.location.pano) {
                     const pid = data.location.pano;
-                    
-                    // Extract centerHeading from tiles data (typically usually around 0-360)
-                    // Fallback to 0 if not available
                     const heading = data.tiles?.centerHeading || 0;
-
                     if (!seenPanos.has(pid)) {
                         seenPanos.add(pid);
                         setFoundPanos((prev) => [...prev, {
@@ -492,28 +441,19 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
                 resolve();
             });
         }));
-
         await Promise.all(promises);
         currentIndex += BATCH_SIZE;
-        setSearchStatus({ 
-            processed: Math.min(currentIndex, finalPoints.length), 
-            total: finalPoints.length 
-        });
-
+        setSearchStatus({ processed: Math.min(currentIndex, finalPoints.length), total: finalPoints.length });
         setTimeout(processBatch, DELAY_MS);
     };
-
     processBatch();
-  }, [mapInstance, clearResultMarkers]);
+  }, [mapInstance, searchRegions, clearResultMarkers, searchMode]);
 
-  // Effect: Render Found Markers
   useEffect(() => {
     if (!mapInstance) return;
-
     const currentMarkerCount = resultMarkersRef.current.size;
     if (foundPanos.length > currentMarkerCount) {
         const newPoints = foundPanos.slice(currentMarkerCount);
-
         const addMarkers = async () => {
             let AdvancedMarkerElement: any;
             if (window.google?.maps?.importLibrary) {
@@ -522,9 +462,7 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
             } else {
                  AdvancedMarkerElement = window.google.maps.marker.AdvancedMarkerElement;
             }
-
             if (!AdvancedMarkerElement) return;
-
             newPoints.forEach((pt) => {
                 const div = document.createElement("div");
                 div.className = "marker-glass"; 
@@ -533,33 +471,26 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
                 div.style.height = "10px";
                 div.style.borderRadius = "50%";
                 div.style.cursor = "pointer";
-
                 const marker = new AdvancedMarkerElement({
                     map: mapInstance,
-                    position: pt, // API accepts object with lat/lng properties, ignores extra
+                    position: pt, 
                     content: div,
                     title: `Pano: ${pt.panoId}`
                 });
-
                 marker.addListener("click", () => {
-                    // Check if we are in analysis mode
                     if (resultMarkersRef.current.size > 0 && document.getElementsByClassName('marker-risk').length > 0) {
                         setSelectedPanoId(pt.panoId);
                     } else {
-                        // Default behavior: Open Street View
                         const panorama = mapInstance.getStreetView();
                         panorama.setPano(pt.panoId);
                         panorama.setPov({ heading: 0, pitch: 0 });
                         panorama.setVisible(true);
                     }
                 });
-                
-                // Allow clicking even if not in analysis mode to show panel if data exists
                 marker.element.addEventListener('click', (e: Event) => {
-                   e.stopPropagation(); // prevent map click
+                   e.stopPropagation(); 
                    setSelectedPanoId(pt.panoId);
                 });
-
                 resultMarkersRef.current.set(pt.panoId, marker);
             });
         };
@@ -567,7 +498,6 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
     }
   }, [foundPanos, mapInstance]);
 
-  // Effect: Sync visual state from scanPoints (Backup for initial load)
   useEffect(() => {
       Object.values(scanPoints).forEach((point: ScanPoint) => {
           const marker = resultMarkersRef.current.get(point.panoId);
@@ -577,40 +507,27 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
       });
   }, [scanPoints]);
 
-
-  // --- Layer Implementations ---
-
   const updateStreetViewLayer = useCallback(async () => {
     if (!mapInstance) return;
     setLayerLoading(true);
-
     try {
         const { StreetViewCoverageLayer, StreetViewService, StreetViewStatus } = await window.google.maps.importLibrary("streetView");
-        
         const coverageLayer = new StreetViewCoverageLayer();
         coverageLayer.setMap(mapInstance);
         streetViewLayerRef.current = coverageLayer;
-
         const svService = new StreetViewService();
-        
         const listener = mapInstance.addListener("click", (event: any) => {
             const clickCoords = event.latLng;
-            
             svService.getPanorama({ location: clickCoords, radius: 50 }, (data: any, status: any) => {
                 if (status === StreetViewStatus.OK) {
                     const panorama = mapInstance.getStreetView();
                     panorama.setPano(data.location.pano);
-                    panorama.setPov({
-                        heading: 270,
-                        pitch: 0,
-                    });
+                    panorama.setPov({ heading: 270, pitch: 0 });
                     panorama.setVisible(true);
                 }
             });
         });
-
         mapClickListenerRef.current = listener;
-
     } catch (e) {
         console.error("Failed to load street view", e);
     } finally {
@@ -618,91 +535,171 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
     }
   }, [mapInstance]);
 
-
-  // Effect: Handle Layer Switching
   useEffect(() => {
     if (!mapInstance) return;
-
     clearLayers();
-
-    if (activeLayer === 'street') {
-        updateStreetViewLayer();
-    }
-
+    if (activeLayer === 'street') updateStreetViewLayer();
   }, [activeLayer, mapInstance, updateStreetViewLayer, clearLayers]);
 
-  // Effect: Monitor Street View Visibility
   useEffect(() => {
     if (!mapInstance) return;
     const panorama = mapInstance.getStreetView();
     if (!panorama) return;
-
     const listener = panorama.addListener("visible_changed", () => {
       const isVisible = panorama.getVisible();
       setIsPanoramaActive(isVisible);
     });
-
-    return () => {
-      window.google.maps.event.removeListener(listener);
-    };
+    return () => { window.google.maps.event.removeListener(listener); };
   }, [mapInstance]);
 
-  // --- Drawing Logic ---
+  // --- Multi-Area Drawing Logic ---
   
-  const toggleDrawingMode = () => {
-    if (activeLayer === 'street') setActiveLayer('none');
-
-    setIsDrawingMode((prev) => {
-        const nextMode = !prev;
-        
-        if (mapInstance) {
-            if (nextMode) {
-                mapInstance.setOptions({ draggable: false, gestureHandling: 'none' });
-                mapInstance.getDiv().style.cursor = 'crosshair';
-                clearSelection();
-                clearResultMarkers();
-                setFoundPanos([]);
-                setSearchStatus(null);
-                setJobId(null);
-                setScanPoints({});
-            } else {
-                mapInstance.setOptions({ draggable: true, gestureHandling: 'greedy' });
-                mapInstance.getDiv().style.cursor = '';
-            }
-        }
-        return nextMode;
-    });
-  };
-
+  // 1. Handle Map Mode Changes (Drag vs Draw)
   useEffect(() => {
-    if (!mapInstance || !isDrawingMode) return;
+     if (!mapInstance) return;
+     if (isRegionSelectMode) {
+         mapInstance.setOptions({ draggable: false, gestureHandling: 'none' });
+         mapInstance.getDiv().style.cursor = 'crosshair';
+     } else {
+         mapInstance.setOptions({ draggable: true, gestureHandling: 'greedy' });
+         mapInstance.getDiv().style.cursor = '';
+     }
+  }, [isRegionSelectMode, mapInstance]);
+
+  // 2. Sync State `searchRegions` to Map Overlays (Rectangles + Markers)
+  useEffect(() => {
+      if(!mapInstance) return;
+
+      const activeIds = new Set(searchRegions.map(r => r.id));
+
+      // Remove Old
+      regionOverlaysRef.current.forEach((overlay, id) => {
+          if(!activeIds.has(id)) {
+              overlay.rect.setMap(null);
+              if(overlay.labelMarker) overlay.labelMarker.map = null;
+              if(overlay.closeMarker) overlay.closeMarker.map = null;
+              regionOverlaysRef.current.delete(id);
+          }
+      });
+
+      // Add New
+      const addOverlays = async () => {
+        let AdvancedMarkerElement: any;
+        if (window.google?.maps?.importLibrary) {
+            const lib = await window.google.maps.importLibrary("marker");
+            AdvancedMarkerElement = lib.AdvancedMarkerElement;
+        } else {
+            AdvancedMarkerElement = window.google.maps.marker.AdvancedMarkerElement;
+        }
+
+        searchRegions.forEach(region => {
+            if (!regionOverlaysRef.current.has(region.id)) {
+                // Draw Rectangle
+                const rect = new window.google.maps.Rectangle({
+                    map: mapInstance,
+                    bounds: region.bounds,
+                    fillColor: region.color, // Use random color
+                    fillOpacity: 0.15,
+                    strokeColor: region.color, // Use random color
+                    strokeWeight: 2,
+                    clickable: false,
+                });
+
+                let labelMarker = null;
+                let closeMarker = null;
+
+                if(AdvancedMarkerElement) {
+                    
+                    // --- 1. Label Marker at NW Corner (Inside) ---
+                    const labelContainer = document.createElement("div");
+                    // Translate: move slightly right (x) and down (y) from the NW point
+                    labelContainer.className = "flex items-center transform translate-x-2 translate-y-4"; 
+                    labelContainer.style.pointerEvents = "none"; // Let clicks pass through if needed, though marker usually blocks
+                    
+                    const labelSpan = document.createElement("span");
+                    labelSpan.className = "px-2 py-0.5 rounded-md text-[10px] font-bold text-white shadow-sm whitespace-nowrap backdrop-blur-sm";
+                    labelSpan.style.backgroundColor = region.color;
+                    labelSpan.innerText = region.label;
+                    
+                    labelContainer.appendChild(labelSpan);
+
+                    labelMarker = new AdvancedMarkerElement({
+                        map: mapInstance,
+                        position: { lat: region.bounds.north, lng: region.bounds.west }, // NW
+                        content: labelContainer,
+                        title: region.label
+                    });
+
+                    // --- 2. Close Button Marker at NE Corner (Inside) ---
+                    const closeContainer = document.createElement("div");
+                    // Translate: move slightly left (-x) and down (y) from the NE point
+                    closeContainer.className = "flex items-center transform -translate-x-2 translate-y-4";
+                    
+                    const btn = document.createElement("button");
+                    btn.innerHTML = `<svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M6 18L18 6M6 6l12 12"></path></svg>`;
+                    btn.className = "bg-white text-slate-500 hover:text-red-500 rounded-full p-1 shadow-md border border-slate-200 transition-colors cursor-pointer";
+                    btn.title = "Remove Area";
+                    // Prevent map click propagation
+                    btn.addEventListener('click', (e: any) => {
+                        e.stopPropagation();
+                        removeRegion(region.id);
+                    });
+
+                    closeContainer.appendChild(btn);
+
+                    closeMarker = new AdvancedMarkerElement({
+                        map: mapInstance,
+                        position: { lat: region.bounds.north, lng: region.bounds.east }, // NE
+                        content: closeContainer,
+                        title: "Remove"
+                    });
+                }
+
+                regionOverlaysRef.current.set(region.id, { rect, labelMarker, closeMarker });
+            }
+        });
+      };
+      
+      addOverlays();
+
+  }, [searchRegions, mapInstance, removeRegion]);
+
+  // 3. Drawing Interaction Listener
+  useEffect(() => {
+    if (!mapInstance || !isRegionSelectMode) return;
+
+    let tempRect: any = null;
+    let startLatLng: any = null;
 
     const handleMouseDown = (e: any) => {
+        startLatLng = e.latLng;
         const startLat = e.latLng.lat();
         const startLng = e.latLng.lng();
+        
+        // Random Color for drawing (temp) - will be finalized on mouseup
+        const tempColor = getRandomColor();
 
-        const rect = new window.google.maps.Rectangle({
+        tempRect = new window.google.maps.Rectangle({
             map: mapInstance,
             bounds: { north: startLat, south: startLat, east: startLng, west: startLng },
-            fillColor: '#3b82f6',
-            fillOpacity: 0.1,
-            strokeColor: '#3b82f6',
-            strokeWeight: 1,
+            fillColor: tempColor, 
+            fillOpacity: 0.2,
+            strokeColor: tempColor,
+            strokeWeight: 2,
             clickable: false,
         });
-        selectionRectRef.current = rect;
 
         const moveListener = mapInstance.addListener('mousemove', (ev: any) => {
+            if(!startLatLng || !tempRect) return;
             const curLat = ev.latLng.lat();
             const curLng = ev.latLng.lng();
-
             const newBounds = {
-                north: Math.max(startLat, curLat),
-                south: Math.min(startLat, curLat),
-                east: Math.max(startLng, curLng),
-                west: Math.min(startLng, curLng)
+                north: Math.max(startLatLng.lat(), curLat),
+                south: Math.min(startLatLng.lat(), curLat),
+                east: Math.max(startLatLng.lng(), curLng),
+                west: Math.min(startLatLng.lng(), curLng)
             };
-            rect.setBounds(newBounds);
+            tempRect.setBounds(newBounds);
         });
         drawingListenersRef.current.push(moveListener);
 
@@ -711,15 +708,33 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
             drawingListenersRef.current = [];
             window.removeEventListener('mouseup', handleMouseUp);
 
-            setIsDrawingMode(false);
-            if (mapInstance) {
-                mapInstance.setOptions({ draggable: true, gestureHandling: 'greedy' });
-                mapInstance.getDiv().style.cursor = '';
+            if (tempRect) {
+                const bounds = tempRect.getBounds();
+                if (bounds) {
+                    const ne = bounds.getNorthEast();
+                    const sw = bounds.getSouthWest();
+                    const center = { lat: (ne.lat() + sw.lat()) / 2, lng: (ne.lng() + sw.lng()) / 2 };
+                    
+                    const newRegion: SearchRegion = {
+                        id: Math.random().toString(36).substr(2, 9),
+                        bounds: {
+                            north: ne.lat(),
+                            south: sw.lat(),
+                            east: ne.lng(),
+                            west: sw.lng()
+                        },
+                        center: center,
+                        label: `Area ${searchRegions.length + 1}`,
+                        color: getRandomColor() // Final color assignment
+                    };
+
+                    setSearchRegions(prev => [...prev, newRegion]);
+                }
+                tempRect.setMap(null); 
+                tempRect = null;
             }
-            
-            if (rect && rect.getBounds()) {
-                performGridSearch(rect.getBounds());
-            }
+            startLatLng = null;
+            setIsRegionSelectMode(false); // Auto disable drawing mode
         };
 
         window.addEventListener('mouseup', handleMouseUp);
@@ -729,13 +744,11 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
     return () => {
         window.google.maps.event.removeListener(downListener);
     };
-  }, [mapInstance, isDrawingMode, performGridSearch]);
-
+  }, [mapInstance, isRegionSelectMode, searchRegions.length]); 
 
   // --- Initialization Logic ---
   const initializeMap = useCallback(async (center: MapCoordinates) => {
     if (!mapRef.current) return;
-
     try {
         let MapConstructor;
         if (window.google?.maps?.importLibrary) {
@@ -744,10 +757,7 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
         } else {
             MapConstructor = window.google.maps.Map;
         }
-
-        if (!MapConstructor) {
-            throw new Error("Google Maps API not loaded correctly.");
-        }
+        if (!MapConstructor) throw new Error("Google Maps API not loaded correctly.");
 
       const map = new MapConstructor(mapRef.current, {
         center: center,
@@ -765,7 +775,6 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
         minZoom: 3,
         clickableIcons: false,
       });
-
       setMapInstance(map);
       setIsLoading(false);
     } catch (e) {
@@ -790,13 +799,11 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
       initializeMap(initialCenter);
       return;
     }
-
     if (!apiKey || apiKey === 'undefined') {
       setIsLoading(false);
       setShowKeyInput(true);
       return;
     }
-
     const scriptId = 'google-maps-script';
     if (document.getElementById(scriptId)) {
         const intervalId = setInterval(() => {
@@ -807,7 +814,6 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
         }, 200);
         return () => clearInterval(intervalId);
     }
-
     const script = document.createElement('script');
     script.id = scriptId;
     script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&loading=async&libraries=marker,streetView,maps`;
@@ -819,7 +825,6 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
       setIsLoading(false);
       setShowKeyInput(true);
     };
-
     document.head.appendChild(script);
   }, [apiKey, initialCenter, initializeMap, showKeyInput]);
 
@@ -829,7 +834,6 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
         async (position) => {
           const pos = { lat: position.coords.latitude, lng: position.coords.longitude };
           mapInstance.setCenter(pos);
-          
           let AdvancedMarkerElement;
           if (window.google?.maps?.importLibrary) {
                const lib = await window.google.maps.importLibrary("marker");
@@ -837,7 +841,6 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
           } else {
                AdvancedMarkerElement = window.google.maps.marker.AdvancedMarkerElement;
           }
-
           if (AdvancedMarkerElement) {
               const userDiv = document.createElement("div");
               userDiv.className = "marker-user";
@@ -847,7 +850,6 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
               userDiv.style.borderRadius = "50%";
               userDiv.style.boxShadow = "0 0 15px rgba(59, 130, 246, 0.6)";
               userDiv.style.border = "3px solid white";
-              
               new AdvancedMarkerElement({
                 position: pos,
                 map: mapInstance,
@@ -874,31 +876,18 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
     window.location.reload();
   };
 
-  // --- UI RENDER: RESTORED & NEW SEARCH BAR ---
+  // --- UI RENDER ---
   return (
     <div className="relative w-full h-full bg-gray-50">
       {isLoading && <div className="absolute inset-0 z-10"><LoadingSpinner /></div>}
 
-      {/* 1. Map Container (Full Screen) */}
       <div ref={mapRef} className="w-full h-full" />
 
-      {/* 2. Top Controls (Restored) */}
       {!isLoading && !showKeyInput && !isPanoramaActive && (
           <>
             <Sidebar isHidden={isPanoramaActive} user={user} authError={authError} />
 
             <div className="absolute top-4 right-4 flex flex-col gap-2 z-30">
-                <button
-                    onClick={toggleDrawingMode}
-                    className={`p-3 rounded-full shadow-lg transition-all backdrop-blur-md border border-white/10 ${
-                        isDrawingMode 
-                        ? 'bg-blue-600 text-white shadow-blue-500/30' 
-                        : 'bg-black/80 text-white/80 hover:bg-black hover:text-white'
-                    }`}
-                    title="Draw Search Area"
-                >
-                    <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
-                </button>
                 <button
                     onClick={() => setShowStats(true)}
                     className="p-3 bg-black/80 text-white/80 rounded-full shadow-lg hover:bg-black hover:text-white transition-all backdrop-blur-md border border-white/10"
@@ -908,7 +897,6 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
                 </button>
             </div>
             
-            {/* Analysis Panel */}
             {selectedPanoId && scanPoints[selectedPanoId] && (
                 <AnalysisPanel 
                     point={scanPoints[selectedPanoId]} 
@@ -916,7 +904,6 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
                 />
             )}
 
-            {/* Pricing Stats Modal */}
             {showStats && (
                 <PricingStatsModal 
                     count={foundPanos.length} 
@@ -926,22 +913,37 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
           </>
       )}
 
-      {/* 3. Bottom Center Search Bar (Updated Design with Dropdown & Image Tray) */}
+      {/* Bottom Center Search Bar with Asset Tray */}
       {!isLoading && !showKeyInput && !isPanoramaActive && (
         <div className="absolute bottom-8 left-1/2 -translate-x-1/2 w-full max-w-md px-4 z-30 flex flex-col items-center">
             
-            {/* Image Upload Tray (Appears in Vision Mode) */}
+            {/* Asset Tray (Vision Mode Only) */}
             {searchMode === 'vision' && (
                 <div className="w-full mb-3 flex gap-2 overflow-x-auto py-1 px-1 animate-in slide-in-from-bottom-4 fade-in duration-300 no-scrollbar">
-                    {/* Add Button */}
-                    <label className="flex-shrink-0 cursor-pointer group">
+                    
+                    {/* 1. Add Image Button */}
+                    <label className="flex-shrink-0 cursor-pointer group" title="Upload Reference Image">
                         <input type="file" multiple accept="image/*" onChange={handleImageUpload} className="hidden" />
                         <div className="w-14 h-14 bg-white/80 backdrop-blur-md rounded-xl border border-white/40 shadow-lg flex items-center justify-center text-violet-500 group-hover:bg-white group-hover:scale-105 transition-all">
-                            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+                            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
                         </div>
                     </label>
 
-                    {/* Image Thumbnails */}
+                    {/* 2. Add Area Toggle Button */}
+                    <button 
+                        onClick={() => setIsRegionSelectMode(!isRegionSelectMode)}
+                        className={`flex-shrink-0 w-14 h-14 backdrop-blur-md rounded-xl border shadow-lg flex items-center justify-center transition-all ${
+                            isRegionSelectMode 
+                            ? 'bg-blue-600 border-blue-400 text-white scale-105 ring-2 ring-blue-300' 
+                            : 'bg-white/80 border-white/40 text-blue-500 hover:bg-white hover:scale-105'
+                        }`}
+                        title="Select Search Area"
+                    >
+                        {/* Dashed Square Icon */}
+                         <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} strokeDasharray="4 4" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" /></svg>
+                    </button>
+
+                    {/* 3. Image Thumbnails */}
                     {uploadedImages.map((img) => (
                         <div key={img.id} className="relative flex-shrink-0 w-14 h-14 rounded-xl overflow-hidden shadow-lg border border-white/40 group animate-in zoom-in duration-200">
                             <img src={img.previewUrl} alt="preview" className="w-full h-full object-cover" />
@@ -953,13 +955,43 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
                             </button>
                         </div>
                     ))}
+
+                    {/* 4. Region Thumbnails (Color Sync) */}
+                    {searchRegions.map((region, idx) => (
+                         <div 
+                            key={region.id} 
+                            onClick={() => focusRegion(region.center)}
+                            // Applying dynamic background/border colors based on region.color
+                            style={{ 
+                                backgroundColor: `${region.color}20`, // 20 hex = approx 12% opacity
+                                borderColor: region.color 
+                            }}
+                            className="relative flex-shrink-0 w-14 h-14 backdrop-blur-md rounded-xl border shadow-lg flex flex-col items-center justify-center cursor-pointer group animate-in zoom-in duration-200"
+                        >
+                            <span 
+                                className="text-[10px] font-bold uppercase"
+                                style={{ color: region.color }}
+                            >Area</span>
+                            <span 
+                                className="text-xs font-bold brightness-75 contrast-125"
+                                style={{ color: region.color }}
+                            >{idx + 1}</span>
+                            
+                            <button 
+                                onClick={(e) => { e.stopPropagation(); removeRegion(region.id); }}
+                                className="absolute top-0.5 right-0.5 bg-black/20 text-slate-700 hover:bg-red-500 hover:text-white rounded-full p-0.5 opacity-0 group-hover:opacity-100 transition-all"
+                            >
+                                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                            </button>
+                        </div>
+                    ))}
+
                 </div>
             )}
 
-            {/* Main Search Bar Container - Fixed Height (h-14) with Stretch alignment */}
+            {/* Search Bar */}
             <div className="w-full h-14 relative pointer-events-auto shadow-2xl rounded-full transition-transform bg-white/90 backdrop-blur-xl border border-white/40 flex items-stretch group-focus-within:scale-[1.02]">
                 
-                {/* Search Mode Dropdown Menu (Appears Above) */}
                 {isDropdownOpen && (
                   <div className="absolute bottom-full left-0 mb-3 w-40 bg-white/95 backdrop-blur-xl border border-white/50 shadow-2xl rounded-2xl overflow-hidden animate-in slide-in-from-bottom-2 fade-in duration-300 z-50 origin-bottom">
                      <button 
@@ -982,7 +1014,6 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
                   </div>
                 )}
 
-                {/* Left: Mode Dropdown Trigger - EXPANDED CLICK AREA */}
                 <button 
                     onClick={() => setIsDropdownOpen(!isDropdownOpen)}
                     className="flex items-center gap-2 pl-6 pr-4 h-full rounded-l-full text-gray-600 hover:text-gray-900 hover:bg-black/5 border-r border-gray-200/50 transition-colors cursor-pointer active:scale-95 z-10 outline-none"
@@ -993,37 +1024,35 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
                     <svg className={`w-3 h-3 text-gray-400 transition-transform duration-300 ease-out ${isDropdownOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
                 </button>
 
-                {/* Center: Input - FULL HEIGHT */}
                 <input 
                     type="text" 
                     className="flex-1 h-full px-4 text-base text-gray-900 bg-transparent focus:outline-none placeholder-gray-400 transition-all"
-                    placeholder={searchMode === 'places' ? "Search city or address..." : "Describe what to find..."}
+                    placeholder={searchMode === 'places' ? "Search city or address..." : (searchRegions.length > 0 ? `Search in ${searchRegions.length} areas...` : "Describe what to find...")}
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && performMultiRegionSearch()}
                 />
 
-                {/* Right: Submit Button - CENTERED */}
                 <div className="pr-2 flex items-center z-10">
-                    <button className={`p-2 rounded-full text-white transition-all duration-300 shadow-md flex items-center justify-center hover:scale-110 active:scale-90 ${searchMode === 'places' ? 'bg-blue-600 hover:bg-blue-700 shadow-blue-500/30' : 'bg-violet-600 hover:bg-violet-700 shadow-violet-500/30'}`}>
+                    <button 
+                        onClick={performMultiRegionSearch}
+                        className={`p-2 rounded-full text-white transition-all duration-300 shadow-md flex items-center justify-center hover:scale-110 active:scale-90 ${searchMode === 'places' ? 'bg-blue-600 hover:bg-blue-700 shadow-blue-500/30' : 'bg-violet-600 hover:bg-violet-700 shadow-violet-500/30'}`}
+                    >
                         {searchMode === 'places' ? (
-                            // Search Icon
                             <svg className="w-5 h-5 animate-in zoom-in duration-200" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
                         ) : (
-                            // Sparkles/AI Icon
                             <svg className="w-5 h-5 animate-in zoom-in duration-200" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
                         )}
                     </button>
                 </div>
             </div>
             
-            {/* Overlay to close dropdown when clicking outside (transparent) */}
             {isDropdownOpen && (
                 <div className="fixed inset-0 z-40" onClick={() => setIsDropdownOpen(false)} />
             )}
         </div>
       )}
 
-      {/* 4. Key Input Modal (Required for Map Load) */}
       {showKeyInput && (
         <div className="flex items-center justify-center w-full h-full bg-gray-50 p-4 absolute inset-0 z-50">
           <div className="bg-white/80 p-6 rounded-2xl shadow-xl w-full max-w-md border border-white/50 backdrop-blur-xl">
