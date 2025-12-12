@@ -12,6 +12,7 @@ const DEFAULT_ZOOM = 11;
 const PRICE_STATIC_IMAGE = 0.007; 
 const PRICE_DYNAMIC_VIEW = 0.014; 
 const MONTHLY_FREE_CREDIT = 200.0;
+const MIN_CELL_SIZE = 0.0005; // Approx 50-55m
 
 // Vibrant colors for regions
 const REGION_COLORS = [
@@ -177,6 +178,7 @@ interface SearchRegion {
     center: { lat: number, lng: number };
     label: string;
     color: string;
+    gridConfig?: { rows: number, cols: number };
 }
 
 export const GoogleMap: React.FC<GoogleMapProps> = ({
@@ -402,18 +404,44 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
     const svService = new window.google.maps.StreetViewService();
     const seenPanos = new Set<string>();
     const allGridPoints: { lat: number; lng: number }[] = [];
-    const step = 0.0002; 
 
     searchRegions.forEach(region => {
         const { north, south, east, west } = region.bounds;
-        for (let lat = south; lat < north; lat += step) {
-            for (let lng = west; lng < east; lng += step) {
-                allGridPoints.push({ lat, lng });
+        // Use gridConfig if available, otherwise fallback to 8x8
+        const { rows, cols } = region.gridConfig || { rows: 8, cols: 8 };
+        
+        // Calculate steps based on dynamic rows/cols
+        const latStep = (north - south) / rows;
+        const lngStep = (east - west) / cols;
+
+        // Collect grid line intersection points
+        const points: { lat: number; lng: number }[] = [];
+        
+        if (rows === 1 && cols === 1) {
+            // If the grid is 1x1, just check the center
+             points.push(region.center);
+        } else {
+            // Check intersections of internal lines
+            // We iterate from 1 to rows-1 (internal lines)
+            for (let r = 1; r < rows; r++) {
+                for (let c = 1; c < cols; c++) {
+                    points.push({ 
+                        lat: south + latStep * r, 
+                        lng: west + lngStep * c 
+                    });
+                }
+            }
+            // Fallback: If no internal intersections (e.g. 1x8 grid), add center to ensure coverage
+            if (points.length === 0) {
+                points.push(region.center);
             }
         }
+        allGridPoints.push(...points);
     });
 
     if (allGridPoints.length === 0) return;
+    
+    // Safety cap
     const MAX_POINTS = 1000;
     const finalPoints = allGridPoints.length > MAX_POINTS ? allGridPoints.slice(0, MAX_POINTS) : allGridPoints;
     setSearchStatus({ processed: 0, total: finalPoints.length });
@@ -429,7 +457,8 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
         }
         const batch = finalPoints.slice(currentIndex, currentIndex + BATCH_SIZE);
         const promises = batch.map((point) => new Promise<void>((resolve) => {
-            svService.getPanorama({ location: point, radius: 40 }, (data: any, status: any) => {
+            // Radius increased to 50m to better snap to roads from grid points
+            svService.getPanorama({ location: point, radius: 50 }, (data: any, status: any) => {
                 if (status === 'OK' && data.location && data.location.pano) {
                     const pid = data.location.pano;
                     const heading = data.tiles?.centerHeading || 0;
@@ -613,15 +642,17 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
                     clickable: false,
                 });
 
-                // --- Draw 8x8 Grid Lines ---
+                // --- Draw Grid Lines Based on Dynamic Config ---
                 const gridLines: any[] = [];
+                const { rows, cols } = region.gridConfig || { rows: 8, cols: 8 };
+                
                 const latSpan = region.bounds.north - region.bounds.south;
                 const lngSpan = region.bounds.east - region.bounds.west;
-                const latStep = latSpan / 8;
-                const lngStep = lngSpan / 8;
+                const latStep = latSpan / rows;
+                const lngStep = lngSpan / cols;
 
-                // Vertical lines (7 lines for 8 spaces)
-                for (let i = 1; i < 8; i++) {
+                // Vertical lines (1 to cols-1)
+                for (let i = 1; i < cols; i++) {
                     const lng = region.bounds.west + (lngStep * i);
                     const line = new window.google.maps.Polyline({
                         map: mapInstance,
@@ -634,8 +665,8 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
                     gridLines.push(line);
                 }
 
-                // Horizontal lines (7 lines for 8 spaces)
-                for (let i = 1; i < 8; i++) {
+                // Horizontal lines (1 to rows-1)
+                for (let i = 1; i < rows; i++) {
                     const lat = region.bounds.south + (latStep * i);
                     const line = new window.google.maps.Polyline({
                         map: mapInstance,
@@ -755,6 +786,14 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
                     const sw = bounds.getSouthWest();
                     const center = { lat: (ne.lat() + sw.lat()) / 2, lng: (ne.lng() + sw.lng()) / 2 };
                     
+                    // --- Dynamic Grid Calculation ---
+                    const latSpan = ne.lat() - sw.lat();
+                    const lngSpan = ne.lng() - sw.lng();
+                    
+                    // Calculate rows/cols based on MIN_CELL_SIZE, capped at 8
+                    const rows = Math.max(1, Math.min(8, Math.floor(latSpan / MIN_CELL_SIZE)));
+                    const cols = Math.max(1, Math.min(8, Math.floor(lngSpan / MIN_CELL_SIZE)));
+
                     const newRegion: SearchRegion = {
                         id: Math.random().toString(36).substr(2, 9),
                         bounds: {
@@ -765,7 +804,8 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
                         },
                         center: center,
                         label: `Area ${searchRegions.length + 1}`,
-                        color: getRandomColor() // Final color assignment
+                        color: getRandomColor(), // Final color assignment
+                        gridConfig: { rows, cols } // Store grid dimension
                     };
 
                     setSearchRegions(prev => [...prev, newRegion]);
