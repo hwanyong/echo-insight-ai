@@ -181,6 +181,15 @@ interface SearchRegion {
     gridConfig?: { rows: number, cols: number };
 }
 
+// Interface for Found Panoramas
+interface FoundPano {
+    lat: number;
+    lng: number;
+    panoId: string;
+    heading: number;
+    regionId: string; // Linked to SearchRegion.id
+}
+
 export const GoogleMap: React.FC<GoogleMapProps> = ({
   apiKey,
   initialCenter = DEFAULT_CENTER,
@@ -211,7 +220,7 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
   
   // Search & Job State
   const [searchStatus, setSearchStatus] = useState<{ processed: number; total: number } | null>(null);
-  const [foundPanos, setFoundPanos] = useState<Array<{ lat: number; lng: number; panoId: string; heading: number }>>([]);
+  const [foundPanos, setFoundPanos] = useState<FoundPano[]>([]);
   const [isSaving, setIsSaving] = useState(false);
   const [jobId, setJobId] = useState<string | null>(null);
   const [scanPoints, setScanPoints] = useState<Record<string, ScanPoint>>({});
@@ -235,6 +244,9 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
 
   const drawingListenersRef = useRef<any[]>([]);
   const resultMarkersRef = useRef<Map<string, any>>(new Map());
+
+  // Ref to track found pano IDs to prevent duplicates across multiple scans
+  const foundPanoIdsRef = useRef<Set<string>>(new Set());
 
   // --- Validation Log ---
   useEffect(() => {
@@ -287,7 +299,44 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
 
   // --- Region Logic ---
   const removeRegion = useCallback((id: string) => {
+      // 1. Remove Region State
       setSearchRegions(prev => prev.filter(r => r.id !== id));
+      
+      // 2. Remove associated Panos/Markers
+      setFoundPanos(prev => {
+          const keepList: FoundPano[] = [];
+          const removeIds: string[] = [];
+
+          prev.forEach(p => {
+              if (p.regionId === id) {
+                  removeIds.push(p.panoId);
+              } else {
+                  keepList.push(p);
+              }
+          });
+
+          // Cleanup Markers and Refs
+          removeIds.forEach(panoId => {
+              // Remove Marker from Map
+              const marker = resultMarkersRef.current.get(panoId);
+              if (marker) {
+                  marker.map = null;
+                  resultMarkersRef.current.delete(panoId);
+              }
+              // Remove ID from duplicate check set
+              foundPanoIdsRef.current.delete(panoId);
+          });
+          
+          // Cleanup ScanPoints (Analysis Results)
+          setScanPoints(prevPoints => {
+              const newPoints = { ...prevPoints };
+              removeIds.forEach(pid => delete newPoints[pid]);
+              return newPoints;
+          });
+
+          return keepList;
+      });
+
   }, []);
 
   const focusRegion = (center: { lat: number; lng: number }) => {
@@ -388,7 +437,71 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
     }
   };
 
-  // --- Search Logic (Multi-Region) ---
+  // --- Auto-Scan Logic for Single Region ---
+  const scanSingleRegion = useCallback(async (region: SearchRegion) => {
+    if (!mapInstance) return;
+
+    const svService = new window.google.maps.StreetViewService();
+    const { north, south, east, west } = region.bounds;
+    // Use gridConfig if available, otherwise fallback to 8x8
+    const { rows, cols } = region.gridConfig || { rows: 8, cols: 8 };
+
+    // Calculate steps based on dynamic rows/cols
+    const latStep = (north - south) / rows;
+    const lngStep = (east - west) / cols;
+
+    // Collect grid line intersection points
+    const points: { lat: number; lng: number }[] = [];
+    
+    // Include corners and edges by iterating 0 to rows/cols inclusive
+    for (let r = 0; r <= rows; r++) {
+        for (let c = 0; c <= cols; c++) {
+            points.push({ 
+                lat: south + latStep * r, 
+                lng: west + lngStep * c 
+            });
+        }
+    }
+
+    if (points.length === 0) return;
+
+    const BATCH_SIZE = 10;
+    const DELAY_MS = 50;
+    let currentIndex = 0;
+
+    const processBatch = async () => {
+        if (currentIndex >= points.length) return;
+        
+        const batch = points.slice(currentIndex, currentIndex + BATCH_SIZE);
+        const promises = batch.map((point) => new Promise<void>((resolve) => {
+            svService.getPanorama({ location: point, radius: 50 }, (data: any, status: any) => {
+                if (status === 'OK' && data.location && data.location.pano) {
+                    const pid = data.location.pano;
+                    const heading = data.tiles?.centerHeading || 0;
+                    if (!foundPanoIdsRef.current.has(pid)) {
+                        foundPanoIdsRef.current.add(pid);
+                        setFoundPanos((prev) => [...prev, {
+                            lat: data.location.latLng.lat(),
+                            lng: data.location.latLng.lng(),
+                            panoId: pid,
+                            heading: heading,
+                            regionId: region.id // Associate with Region ID
+                        }]);
+                    }
+                }
+                resolve();
+            });
+        }));
+        await Promise.all(promises);
+        currentIndex += BATCH_SIZE;
+        setTimeout(processBatch, DELAY_MS);
+    };
+    
+    processBatch();
+  }, [mapInstance]);
+
+
+  // --- Global Search Logic (Multi-Region / Refresh) ---
   const performMultiRegionSearch = useCallback(async () => {
     if (!mapInstance || searchRegions.length === 0) {
         if(searchMode === 'vision') alert("Please select at least one area.");
@@ -400,40 +513,29 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
     setScanPoints({});
     setSelectedPanoId(null);
     clearResultMarkers();
+    
+    // Clear the ref to allow re-discovery
+    foundPanoIdsRef.current.clear();
 
     const svService = new window.google.maps.StreetViewService();
-    const seenPanos = new Set<string>();
-    const allGridPoints: { lat: number; lng: number }[] = [];
+    const allGridPoints: { lat: number; lng: number; regionId: string }[] = [];
 
     searchRegions.forEach(region => {
         const { north, south, east, west } = region.bounds;
-        // Use gridConfig if available, otherwise fallback to 8x8
         const { rows, cols } = region.gridConfig || { rows: 8, cols: 8 };
-        
-        // Calculate steps based on dynamic rows/cols
         const latStep = (north - south) / rows;
         const lngStep = (east - west) / cols;
 
-        // Collect grid line intersection points
-        const points: { lat: number; lng: number }[] = [];
+        const points: { lat: number; lng: number; regionId: string }[] = [];
         
-        if (rows === 1 && cols === 1) {
-            // If the grid is 1x1, just check the center
-             points.push(region.center);
-        } else {
-            // Check intersections of internal lines
-            // We iterate from 1 to rows-1 (internal lines)
-            for (let r = 1; r < rows; r++) {
-                for (let c = 1; c < cols; c++) {
-                    points.push({ 
-                        lat: south + latStep * r, 
-                        lng: west + lngStep * c 
-                    });
-                }
-            }
-            // Fallback: If no internal intersections (e.g. 1x8 grid), add center to ensure coverage
-            if (points.length === 0) {
-                points.push(region.center);
+        // Include corners and edges by iterating 0 to rows/cols inclusive
+        for (let r = 0; r <= rows; r++) {
+            for (let c = 0; c <= cols; c++) {
+                points.push({ 
+                    lat: south + latStep * r, 
+                    lng: west + lngStep * c,
+                    regionId: region.id
+                });
             }
         }
         allGridPoints.push(...points);
@@ -457,18 +559,18 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
         }
         const batch = finalPoints.slice(currentIndex, currentIndex + BATCH_SIZE);
         const promises = batch.map((point) => new Promise<void>((resolve) => {
-            // Radius increased to 50m to better snap to roads from grid points
             svService.getPanorama({ location: point, radius: 50 }, (data: any, status: any) => {
                 if (status === 'OK' && data.location && data.location.pano) {
                     const pid = data.location.pano;
                     const heading = data.tiles?.centerHeading || 0;
-                    if (!seenPanos.has(pid)) {
-                        seenPanos.add(pid);
+                    if (!foundPanoIdsRef.current.has(pid)) {
+                        foundPanoIdsRef.current.add(pid);
                         setFoundPanos((prev) => [...prev, {
                             lat: data.location.latLng.lat(),
                             lng: data.location.latLng.lng(),
                             panoId: pid,
-                            heading: heading
+                            heading: heading,
+                            regionId: point.regionId // Pass through correct region ID
                         }]);
                     }
                 }
@@ -487,6 +589,7 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
     if (!mapInstance) return;
     const currentMarkerCount = resultMarkersRef.current.size;
     if (foundPanos.length > currentMarkerCount) {
+        // Only process new items
         const newPoints = foundPanos.slice(currentMarkerCount);
         const addMarkers = async () => {
             let AdvancedMarkerElement: any;
@@ -498,6 +601,8 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
             }
             if (!AdvancedMarkerElement) return;
             newPoints.forEach((pt) => {
+                // If marker already exists (e.g. from a different region overlapping), skip or update?
+                // Currently foundPanoIdsRef prevents duplicates so we are safe.
                 const div = document.createElement("div");
                 div.className = "marker-glass"; 
                 div.style.backgroundColor = "#8b5cf6"; 
@@ -809,6 +914,8 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
                     };
 
                     setSearchRegions(prev => [...prev, newRegion]);
+                    // Trigger auto-scan for the new region immediately
+                    scanSingleRegion(newRegion);
                 }
                 tempRect.setMap(null); 
                 tempRect = null;
@@ -824,7 +931,7 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
     return () => {
         window.google.maps.event.removeListener(downListener);
     };
-  }, [mapInstance, isRegionSelectMode, searchRegions.length]); 
+  }, [mapInstance, isRegionSelectMode, searchRegions.length, scanSingleRegion]); 
 
   // --- Initialization Logic ---
   const initializeMap = useCallback(async (center: MapCoordinates) => {
