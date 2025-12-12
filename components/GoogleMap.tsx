@@ -173,7 +173,12 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [showKeyInput, setShowKeyInput] = useState(false);
   const [manualKey, setManualKey] = useState('');
+  const [searchQuery, setSearchQuery] = useState('');
   
+  // Search Mode State
+  const [searchMode, setSearchMode] = useState<'places' | 'vision'>('places');
+  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+
   // Layer State
   const [activeLayer, setActiveLayer] = useState<MapLayerType>('none');
   const [layerLoading, setLayerLoading] = useState(false);
@@ -844,145 +849,154 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
     window.location.reload();
   };
 
-  if (showKeyInput) {
-    return (
-      <div className="flex items-center justify-center w-full h-full bg-gray-50 p-4 absolute inset-0 z-50">
-        <div className="bg-white/80 p-6 rounded-2xl shadow-xl w-full max-w-md border border-white/50 backdrop-blur-xl">
-          <h2 className="text-xl font-medium mb-2 text-slate-800">System Config</h2>
-          {error && (
-            <div className="bg-red-50 text-red-600 p-3 rounded-lg text-sm mb-4 border border-red-200">
-              <p>⚠️ {error}</p>
-            </div>
-          )}
-           <form onSubmit={handleSaveKey}>
-            <label className="block text-xs font-medium text-slate-500 uppercase mb-1">Enter API Access Key</label>
-            <input 
-              type="text" 
-              value={manualKey}
-              onChange={(e) => setManualKey(e.target.value)}
-              placeholder="AIzaSy..."
-              className="w-full p-3 bg-white border border-slate-200 rounded-lg mb-2 focus:outline-none focus:border-blue-400 text-slate-800 placeholder-slate-400 shadow-inner"
-            />
-            <button type="submit" className="w-full bg-slate-900 hover:bg-black text-white py-3 rounded-lg transition-all font-medium shadow-lg">Initialize System</button>
-          </form>
-           {localStorage.getItem('google_maps_api_key') && (
-              <div className="mt-4 text-center">
-                 <button onClick={handleClearKey} className="text-xs text-red-400 hover:text-red-500 underline">Clear Key</button>
-              </div>
-           )}
-        </div>
-      </div>
-    );
-  }
-
+  // --- UI RENDER: RESTORED & NEW SEARCH BAR ---
   return (
     <div className="relative w-full h-full bg-gray-50">
       {isLoading && <div className="absolute inset-0 z-10"><LoadingSpinner /></div>}
 
-      <Sidebar isHidden={isPanoramaActive} user={user} authError={authError} />
-
-      {/* Analysis Panel */}
-      {selectedPanoId && (
-        <AnalysisPanel 
-            point={scanPoints[selectedPanoId] || { panoId: selectedPanoId, status: 'ready', location: { latitude: 0, longitude: 0 } }} 
-            onClose={() => setSelectedPanoId(null)} 
-        />
-      )}
-
-      {showStats && <PricingStatsModal count={foundPanos.length} onClose={() => setShowStats(false)} />}
-      
+      {/* 1. Map Container (Full Screen) */}
       <div ref={mapRef} className="w-full h-full" />
 
+      {/* 2. Top Controls (Restored) */}
       {!isLoading && !showKeyInput && !isPanoramaActive && (
-        <div className="absolute top-4 right-4 z-30 flex flex-col gap-3">
-            <div className="relative group">
-                <button 
-                    onClick={toggleDrawingMode}
-                    className={`w-11 h-11 flex items-center justify-center rounded-full shadow-lg border border-white/40 backdrop-blur-md transition-all duration-300
-                        ${isDrawingMode ? 'bg-blue-600 text-white scale-110' : 'bg-white/80 text-slate-600 hover:bg-white hover:scale-105'}`}
-                >
-                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 15l-2 5L9 9l11 4-5 2zm0 0l5 5M7.188 2.239l.777 2.897M5.136 7.965l-2.898-.777M13.95 4.05l-2.122 2.122m-5.657 5.656l-2.12 2.122" /></svg>
-                </button>
-            </div>
+          <>
+            <Sidebar isHidden={isPanoramaActive} user={user} authError={authError} />
 
-            <div className="relative group">
-                <button 
-                    onClick={() => {
-                        if (isDrawingMode) toggleDrawingMode();
-                        setActiveLayer(activeLayer === 'street' ? 'none' : 'street');
-                    }}
-                    className={`w-11 h-11 flex items-center justify-center rounded-full shadow-lg border border-white/40 backdrop-blur-md transition-all duration-300
-                        ${activeLayer === 'street' ? 'bg-violet-600 text-white scale-110' : 'bg-white/80 text-slate-600 hover:bg-white hover:scale-105'}`}
+            <div className="absolute top-4 right-4 flex flex-col gap-2 z-30">
+                <button
+                    onClick={toggleDrawingMode}
+                    className={`p-3 rounded-full shadow-lg transition-all backdrop-blur-md border border-white/10 ${
+                        isDrawingMode 
+                        ? 'bg-blue-600 text-white shadow-blue-500/30' 
+                        : 'bg-black/80 text-white/80 hover:bg-black hover:text-white'
+                    }`}
+                    title="Draw Search Area"
                 >
-                     <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-1-13h2v6h-2zm0 8h2v2h-2z"/></svg>
+                    <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
+                </button>
+                <button
+                    onClick={() => setShowStats(true)}
+                    className="p-3 bg-black/80 text-white/80 rounded-full shadow-lg hover:bg-black hover:text-white transition-all backdrop-blur-md border border-white/10"
+                    title="Show Stats"
+                >
+                   <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" /></svg>
                 </button>
             </div>
             
-            {layerLoading && (
-                <div className="absolute top-0 right-14 bg-white/80 backdrop-blur-md px-3 py-1.5 rounded-full shadow-sm text-xs font-medium text-slate-600 flex items-center gap-2 whitespace-nowrap animate-in fade-in slide-in-from-right-2">
-                    <div className="w-2 h-2 rounded-full bg-violet-400 animate-pulse" /> Loading Coverage...
-                </div>
+            {/* Analysis Panel */}
+            {selectedPanoId && scanPoints[selectedPanoId] && (
+                <AnalysisPanel 
+                    point={scanPoints[selectedPanoId]} 
+                    onClose={() => setSelectedPanoId(null)} 
+                />
             )}
-            
-            {isDrawingMode && !searchStatus && (
-                <div className="absolute top-0 right-14 bg-blue-600/90 backdrop-blur-md px-3 py-1.5 rounded-full shadow-lg text-xs font-medium text-white whitespace-nowrap animate-in fade-in slide-in-from-right-2">
-                    Drag to select area
+
+            {/* Pricing Stats Modal */}
+            {showStats && (
+                <PricingStatsModal 
+                    count={foundPanos.length} 
+                    onClose={() => setShowStats(false)} 
+                />
+            )}
+          </>
+      )}
+
+      {/* 3. Bottom Center Search Bar (Updated Design with Dropdown) */}
+      {!isLoading && !showKeyInput && !isPanoramaActive && (
+        <div className="absolute bottom-8 left-1/2 -translate-x-1/2 w-full max-w-md px-4 z-30">
+            <div className="relative pointer-events-auto shadow-2xl rounded-full transition-transform bg-white/90 backdrop-blur-xl border border-white/40 flex items-center group-focus-within:scale-[1.02]">
+                
+                {/* Search Mode Dropdown Menu (Appears Above with slide-in animation) */}
+                {isDropdownOpen && (
+                  <div className="absolute bottom-full left-0 mb-3 w-40 bg-white/95 backdrop-blur-xl border border-white/50 shadow-2xl rounded-2xl overflow-hidden animate-in slide-in-from-bottom-2 fade-in duration-300 z-50 origin-bottom">
+                     <button 
+                        onClick={() => { setSearchMode('places'); setIsDropdownOpen(false); }}
+                        className={`w-full text-left px-4 py-3 flex items-center gap-3 hover:bg-blue-50 transition-colors ${searchMode === 'places' ? 'text-blue-600 bg-blue-50/50' : 'text-slate-600'}`}
+                     >
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+                        <span className="font-medium text-sm">Places</span>
+                        {searchMode === 'places' && <div className="ml-auto w-1.5 h-1.5 rounded-full bg-blue-600 shadow-[0_0_8px_rgba(37,99,235,0.5)]"/>}
+                     </button>
+                     <div className="h-px bg-slate-100 mx-2" />
+                     <button 
+                        onClick={() => { setSearchMode('vision'); setIsDropdownOpen(false); }}
+                        className={`w-full text-left px-4 py-3 flex items-center gap-3 hover:bg-violet-50 transition-colors ${searchMode === 'vision' ? 'text-violet-600 bg-violet-50/50' : 'text-slate-600'}`}
+                     >
+                         <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
+                        <span className="font-medium text-sm">Vision</span>
+                        {searchMode === 'vision' && <div className="ml-auto w-1.5 h-1.5 rounded-full bg-violet-600 shadow-[0_0_8px_rgba(139,92,246,0.5)]"/>}
+                     </button>
+                  </div>
+                )}
+
+                {/* Left: Mode Dropdown Trigger */}
+                <button 
+                    onClick={() => setIsDropdownOpen(!isDropdownOpen)}
+                    className="flex items-center gap-2 pl-5 pr-3 py-4 text-gray-600 hover:text-gray-900 border-r border-gray-200/50 transition-colors active:scale-95"
+                >
+                    <span className="text-sm font-semibold tracking-tight min-w-[3rem] text-left">
+                        {searchMode === 'places' ? 'Places' : 'Vision'}
+                    </span>
+                    <svg className={`w-3 h-3 text-gray-400 transition-transform duration-300 ease-out ${isDropdownOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+                </button>
+
+                {/* Center: Input */}
+                <input 
+                    type="text" 
+                    className="flex-1 py-4 px-4 text-base text-gray-900 bg-transparent focus:outline-none placeholder-gray-400 transition-all"
+                    placeholder={searchMode === 'places' ? "Search city or address..." : "Describe what to find..."}
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                />
+
+                {/* Right: Submit Button (Dynamic Icon with elastic pop effect) */}
+                <div className="pr-2">
+                    <button className={`p-2 rounded-full text-white transition-all duration-300 shadow-md flex items-center justify-center hover:scale-110 active:scale-90 ${searchMode === 'places' ? 'bg-blue-600 hover:bg-blue-700 shadow-blue-500/30' : 'bg-violet-600 hover:bg-violet-700 shadow-violet-500/30'}`}>
+                        {searchMode === 'places' ? (
+                            // Search Icon
+                            <svg className="w-5 h-5 animate-in zoom-in duration-200" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
+                        ) : (
+                            // Sparkles/AI Icon
+                            <svg className="w-5 h-5 animate-in zoom-in duration-200" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
+                        )}
+                    </button>
                 </div>
+            </div>
+            
+            {/* Overlay to close dropdown when clicking outside (transparent) */}
+            {isDropdownOpen && (
+                <div className="fixed inset-0 z-40" onClick={() => setIsDropdownOpen(false)} />
             )}
         </div>
       )}
 
-      {!isLoading && !showKeyInput && !isPanoramaActive && (searchStatus || foundPanos.length > 0) && (
-        <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30">
-             {searchStatus && (
-                <div className="bg-white/90 backdrop-blur-xl px-4 py-2 rounded-full border border-white/50 shadow-xl flex items-center gap-3">
-                    <div className="w-3 h-3 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
-                    <div className="flex flex-col">
-                        <span className="text-[10px] font-bold text-slate-500 uppercase leading-none">Scanning</span>
-                        <span className="text-[10px] font-mono text-slate-800 leading-none">{searchStatus.processed} / {searchStatus.total}</span>
-                    </div>
-                </div>
+      {/* 4. Key Input Modal (Required for Map Load) */}
+      {showKeyInput && (
+        <div className="flex items-center justify-center w-full h-full bg-gray-50 p-4 absolute inset-0 z-50">
+          <div className="bg-white/80 p-6 rounded-2xl shadow-xl w-full max-w-md border border-white/50 backdrop-blur-xl">
+            <h2 className="text-xl font-medium mb-2 text-slate-800">System Config</h2>
+            {error && (
+              <div className="bg-red-50 text-red-600 p-3 rounded-lg text-sm mb-4 border border-red-200">
+                <p>⚠️ {error}</p>
+              </div>
             )}
-
-            {foundPanos.length > 0 && !searchStatus && (
-                <div className="bg-white/80 backdrop-blur-xl p-1.5 rounded-full border border-white/50 shadow-2xl flex items-center gap-1 animate-in slide-in-from-top-4 fade-in">
-                    <div className="px-3 flex items-center gap-2 border-r border-slate-200/60 pr-3">
-                        <div className={`w-2 h-2 rounded-full ${jobId ? 'bg-yellow-400 animate-pulse' : 'bg-violet-500'}`} />
-                        <span className="text-xs font-bold text-slate-700">
-                            {foundPanos.length} <span className="font-normal text-slate-500">Points</span>
-                        </span>
-                    </div>
-                    
-                    <button onClick={() => setShowStats(true)} className="p-2 hover:bg-slate-100 rounded-full text-slate-500 hover:text-slate-800 transition-colors">
-                        <span className="text-xs font-bold">$$?</span>
-                    </button>
-
-                    <button
-                        onClick={handleSaveToServer}
-                        disabled={isSaving || !!jobId}
-                        className={`px-3 py-1.5 rounded-full text-xs font-bold transition-all flex items-center gap-1.5
-                            ${(isSaving || jobId)
-                                ? 'bg-slate-100 text-slate-400 cursor-not-allowed' 
-                                : 'bg-violet-600 text-white hover:bg-violet-700 shadow-md hover:shadow-lg'}`}
-                    >
-                        {isSaving ? 'Sending...' : (jobId ? 'Analyzing...' : 'Upload')}
-                    </button>
-
-                    <button 
-                        onClick={() => {
-                            setFoundPanos([]);
-                            clearResultMarkers();
-                            clearSelection();
-                            setJobId(null);
-                            setScanPoints({});
-                            setSelectedPanoId(null);
-                        }}
-                        className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-red-50 text-slate-400 hover:text-red-500 transition-colors"
-                    >
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
-                    </button>
+             <form onSubmit={handleSaveKey}>
+              <label className="block text-xs font-medium text-slate-500 uppercase mb-1">Enter API Access Key</label>
+              <input 
+                type="text" 
+                value={manualKey}
+                onChange={(e) => setManualKey(e.target.value)}
+                placeholder="AIzaSy..."
+                className="w-full p-3 bg-white border border-slate-200 rounded-lg mb-2 focus:outline-none focus:border-blue-400 text-slate-800 placeholder-slate-400 shadow-inner"
+              />
+              <button type="submit" className="w-full bg-slate-900 hover:bg-black text-white py-3 rounded-lg transition-all font-medium shadow-lg">Initialize System</button>
+            </form>
+             {localStorage.getItem('google_maps_api_key') && (
+                <div className="mt-4 text-center">
+                   <button onClick={handleClearKey} className="text-xs text-red-400 hover:text-red-500 underline">Clear Key</button>
                 </div>
-            )}
+             )}
+          </div>
         </div>
       )}
     </div>
