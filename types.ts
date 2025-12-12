@@ -26,14 +26,18 @@ export type MapLayerType = 'none' | 'street';
 
 // --- Server Side Data Models ---
 
+// New: Defines the context for the vision search request
+export interface SearchContext {
+  queryText: string;
+  queryImages?: string[]; // Array of Base64 strings or URLs
+  searchMode: 'vision' | 'places';
+  timestamp: string;
+}
+
 export interface ScanJob {
   jobId: string;
   status: 'uploading' | 'processing' | 'completed' | 'failed';
-  // New generic search query structure
-  searchQuery?: {
-    text: string;
-    imageRef?: string;
-  };
+  searchContext?: SearchContext;
   totalPoints: number;
   createdAt: any; // FirebaseFirestore.Timestamp
 }

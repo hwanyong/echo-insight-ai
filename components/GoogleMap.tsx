@@ -60,10 +60,12 @@ const LoadingSpinner: React.FC = () => (
 
 interface PricingStatsModalProps {
   count: number;
+  isSaving: boolean;
   onClose: () => void;
+  onConfirm: () => void;
 }
 
-const PricingStatsModal: React.FC<PricingStatsModalProps> = ({ count, onClose }) => {
+const PricingStatsModal: React.FC<PricingStatsModalProps> = ({ count, isSaving, onClose, onConfirm }) => {
   const estStaticCost = count * PRICE_STATIC_IMAGE;
   const estDynamicCost = count * PRICE_DYNAMIC_VIEW;
   const freeTierUsedPercent = (estStaticCost / MONTHLY_FREE_CREDIT) * 100;
@@ -113,12 +115,32 @@ const PricingStatsModal: React.FC<PricingStatsModalProps> = ({ count, onClose })
             Current metadata search is free.
           </p>
         </div>
-        <button 
-          onClick={onClose}
-          className="w-full py-3 bg-slate-900/90 hover:bg-slate-800 text-white rounded-xl font-medium transition-colors shadow-lg backdrop-blur-md"
-        >
-          Close Report
-        </button>
+        
+        <div className="flex gap-2">
+             <button 
+              onClick={onClose}
+              className="flex-1 py-3 bg-white/60 hover:bg-white text-slate-700 rounded-xl font-medium transition-colors shadow-sm border border-white/50"
+            >
+              Cancel
+            </button>
+            <button 
+              onClick={onConfirm}
+              disabled={count === 0 || isSaving}
+              className="flex-1 py-3 bg-violet-600 hover:bg-violet-700 disabled:bg-slate-400 text-white rounded-xl font-medium transition-colors shadow-lg backdrop-blur-md flex items-center justify-center gap-2"
+            >
+              {isSaving ? (
+                  <>
+                    <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+                    <span>Uploading...</span>
+                  </>
+              ) : (
+                  <>
+                    <span>Start Analysis</span>
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
+                  </>
+              )}
+            </button>
+        </div>
       </div>
     </div>
   );
@@ -374,8 +396,11 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
   const handleSaveToServer = async () => {
     if (foundPanos.length === 0) return;
     setIsSaving(true);
+    
     try {
         const uploadScanData = httpsCallable(functions, 'uploadScanData');
+        
+        // 1. Calculate Bounding Box and Center for Metadata
         const lats = foundPanos.map(p => p.lat);
         const lngs = foundPanos.map(p => p.lng);
         const minLat = Math.min(...lats);
@@ -384,18 +409,47 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
         const maxLng = Math.max(...lngs);
         const centerLat = (minLat + maxLat) / 2;
         const centerLng = (minLng + maxLng) / 2;
+
+        // 2. Prepare Payload
         const scanPointsPayload = foundPanos.map(p => ({
             panoId: p.panoId,
             location: { latitude: p.lat, longitude: p.lng },
-            heading: p.heading 
+            heading: p.heading,
+            pitch: 0 
         }));
-        const response: any = await uploadScanData({
-          region: { latitude: centerLat, longitude: centerLng },
-          scanPoints: scanPointsPayload
-        });
+
+        const payload = {
+            searchContext: {
+                queryText: searchQuery,
+                // Note: For real file uploads, we should upload to Storage and pass URLs.
+                // For this prototype, we're assuming the preview URL or passing a placeholder.
+                // In a production app, handleImageUpload would upload to Firebase Storage first.
+                queryImages: uploadedImages.map(img => img.previewUrl), 
+                searchMode: searchMode,
+                timestamp: new Date().toISOString()
+            },
+            regionMetadata: {
+                center: { latitude: centerLat, longitude: centerLng },
+                totalBounds: {
+                    north: maxLat,
+                    south: minLat,
+                    east: maxLng,
+                    west: minLng
+                },
+                regionCount: searchRegions.length
+            },
+            scanPoints: scanPointsPayload
+        };
+
+        // 3. Send
+        const response: any = await uploadScanData(payload);
         const newJobId = response.data.jobId;
         console.log("Job Created:", newJobId);
         setJobId(newJobId);
+        
+        // Close modal after successful upload start
+        setShowStats(false);
+
     } catch (err: any) {
         console.error(err);
         alert(`Failed to upload: ${err.message}`);
@@ -420,8 +474,25 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
         // Flexible Mapping for Generic Visual Search
         const aiResultRaw = raw.aiResult || raw.aiResultRaw;
         
-        // Check for detected objects array (New Generic Schema)
-        const detectedObjects = aiResultRaw?.detected_objects || aiResultRaw?.poles || [];
+        // ADAPTER: Handle "Flat" JSON from logs if "detected_objects" is missing
+        let detectedObjects = aiResultRaw?.detected_objects || aiResultRaw?.poles || [];
+        
+        // Fix: handle string "true" response from Gemini JSON mode
+        const isFound = aiResultRaw?.found === true || String(aiResultRaw?.found).toLowerCase() === 'true';
+
+        if (detectedObjects.length === 0 && isFound) {
+             // Create a synthetic object so the UI treats it as "Found"
+             detectedObjects = [{
+                 id: 'legacy-match',
+                 label: aiResultRaw.matched_keywords?.[0] || 'Object',
+                 confidence: (aiResultRaw.confidence_score || 0) / 100,
+                 description: aiResultRaw.description,
+                 spatial: {
+                     heading: 0,
+                     distance: 0
+                 }
+             }];
+        }
         
         const data: ScanPoint = {
             panoId: raw.panoId,
@@ -594,6 +665,10 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
     const processBatch = async () => {
         if (currentIndex >= finalPoints.length) {
             setSearchStatus(null);
+            // Auto open stats when vision search finishes finding points
+            if (searchMode === 'vision') {
+                setShowStats(true);
+            }
             return;
         }
         const batch = finalPoints.slice(currentIndex, currentIndex + BATCH_SIZE);
@@ -1176,8 +1251,10 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
 
             {showStats && (
                 <PricingStatsModal 
-                    count={foundPanos.length} 
-                    onClose={() => setShowStats(false)} 
+                    count={foundPanos.length}
+                    isSaving={isSaving}
+                    onClose={() => setShowStats(false)}
+                    onConfirm={handleSaveToServer}
                 />
             )}
           </>
