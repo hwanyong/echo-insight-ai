@@ -223,9 +223,14 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
   const streetViewLayerRef = useRef<any>(null);
   const mapClickListenerRef = useRef<any>(null);
   
-  // Ref to track overlays (rectangles + markers) to sync with state
-  // Updated type to store multiple markers per region
-  const regionOverlaysRef = useRef<Map<string, { rect: any, labelMarker: any, closeMarker: any }>>(new Map());
+  // Ref to track overlays (rectangles + markers + grid lines) to sync with state
+  const regionOverlaysRef = useRef<Map<string, { 
+      rect: any, 
+      labelMarker: any, 
+      closeMarker: any,
+      gridLines: any[] // Store grid lines for cleanup
+  }>>(new Map());
+
   const drawingListenersRef = useRef<any[]>([]);
   const resultMarkersRef = useRef<Map<string, any>>(new Map());
 
@@ -578,6 +583,9 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
               overlay.rect.setMap(null);
               if(overlay.labelMarker) overlay.labelMarker.map = null;
               if(overlay.closeMarker) overlay.closeMarker.map = null;
+              // Clean up grid lines
+              if(overlay.gridLines) overlay.gridLines.forEach(l => l.setMap(null));
+              
               regionOverlaysRef.current.delete(id);
           }
       });
@@ -594,16 +602,51 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
 
         searchRegions.forEach(region => {
             if (!regionOverlaysRef.current.has(region.id)) {
-                // Draw Rectangle
+                // Draw Border Rectangle
                 const rect = new window.google.maps.Rectangle({
                     map: mapInstance,
                     bounds: region.bounds,
-                    fillColor: region.color, // Use random color
-                    fillOpacity: 0.15,
-                    strokeColor: region.color, // Use random color
-                    strokeWeight: 2,
+                    fillColor: region.color, 
+                    fillOpacity: 0.1, // Very transparent
+                    strokeColor: region.color, 
+                    strokeWeight: 2, // Thicker border
                     clickable: false,
                 });
+
+                // --- Draw 8x8 Grid Lines ---
+                const gridLines: any[] = [];
+                const latSpan = region.bounds.north - region.bounds.south;
+                const lngSpan = region.bounds.east - region.bounds.west;
+                const latStep = latSpan / 8;
+                const lngStep = lngSpan / 8;
+
+                // Vertical lines (7 lines for 8 spaces)
+                for (let i = 1; i < 8; i++) {
+                    const lng = region.bounds.west + (lngStep * i);
+                    const line = new window.google.maps.Polyline({
+                        map: mapInstance,
+                        path: [{lat: region.bounds.south, lng}, {lat: region.bounds.north, lng}],
+                        strokeColor: region.color,
+                        strokeOpacity: 0.5,
+                        strokeWeight: 1,
+                        clickable: false
+                    });
+                    gridLines.push(line);
+                }
+
+                // Horizontal lines (7 lines for 8 spaces)
+                for (let i = 1; i < 8; i++) {
+                    const lat = region.bounds.south + (latStep * i);
+                    const line = new window.google.maps.Polyline({
+                        map: mapInstance,
+                        path: [{lat, lng: region.bounds.west}, {lat, lng: region.bounds.east}],
+                        strokeColor: region.color,
+                        strokeOpacity: 0.5,
+                        strokeWeight: 1,
+                        clickable: false
+                    });
+                    gridLines.push(line);
+                }
 
                 let labelMarker = null;
                 let closeMarker = null;
@@ -612,9 +655,8 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
                     
                     // --- 1. Label Marker at NW Corner (Inside) ---
                     const labelContainer = document.createElement("div");
-                    // Translate: move slightly right (x) and down (y) from the NW point
                     labelContainer.className = "flex items-center transform translate-x-2 translate-y-4"; 
-                    labelContainer.style.pointerEvents = "none"; // Let clicks pass through if needed, though marker usually blocks
+                    labelContainer.style.pointerEvents = "none"; 
                     
                     const labelSpan = document.createElement("span");
                     labelSpan.className = "px-2 py-0.5 rounded-md text-[10px] font-bold text-white shadow-sm whitespace-nowrap backdrop-blur-sm";
@@ -632,14 +674,12 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
 
                     // --- 2. Close Button Marker at NE Corner (Inside) ---
                     const closeContainer = document.createElement("div");
-                    // Translate: move slightly left (-x) and down (y) from the NE point
                     closeContainer.className = "flex items-center transform -translate-x-2 translate-y-4";
                     
                     const btn = document.createElement("button");
                     btn.innerHTML = `<svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M6 18L18 6M6 6l12 12"></path></svg>`;
                     btn.className = "bg-white text-slate-500 hover:text-red-500 rounded-full p-1 shadow-md border border-slate-200 transition-colors cursor-pointer";
                     btn.title = "Remove Area";
-                    // Prevent map click propagation
                     btn.addEventListener('click', (e: any) => {
                         e.stopPropagation();
                         removeRegion(region.id);
@@ -655,7 +695,7 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
                     });
                 }
 
-                regionOverlaysRef.current.set(region.id, { rect, labelMarker, closeMarker });
+                regionOverlaysRef.current.set(region.id, { rect, labelMarker, closeMarker, gridLines });
             }
         });
       };
