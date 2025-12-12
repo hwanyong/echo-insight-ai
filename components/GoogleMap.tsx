@@ -1,3 +1,4 @@
+
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { GoogleMapProps, MapCoordinates, MapLayerType, ScanPoint } from '../types';
@@ -1557,6 +1558,27 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
             
             {/* My Location FAB - Adjusted for better visibility and Z-Index */}
             <div className="absolute bottom-36 right-4 flex flex-col gap-3 z-50">
+               
+               {/* Street View Toggle Button */}
+               <button
+                  onClick={() => setActiveLayer(prev => prev === 'street' ? 'none' : 'street')}
+                  disabled={layerLoading}
+                  className={`p-3 rounded-full shadow-xl transition-all active:scale-95 border border-white/20 ${
+                      activeLayer === 'street' 
+                      ? 'bg-yellow-400 text-slate-900 ring-2 ring-yellow-200' 
+                      : 'bg-white text-slate-700 hover:bg-slate-50 hover:text-yellow-600'
+                  }`}
+                  title="Toggle Street View Layer"
+               >
+                  {layerLoading ? (
+                      <div className="w-6 h-6 border-2 border-current border-t-transparent rounded-full animate-spin" />
+                  ) : (
+                      <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                      </svg>
+                  )}
+               </button>
+
                {/* Zoom Control Group */}
                <div className="flex flex-col rounded-xl overflow-hidden shadow-xl border border-white/20">
                   <button 
