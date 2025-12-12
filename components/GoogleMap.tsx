@@ -198,6 +198,7 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
   // References
   const streetViewLayerRef = useRef<any>(null);
   const mapClickListenerRef = useRef<any>(null);
+  const userMarkerRef = useRef<any>(null);
   
   // Ref to track overlays (rectangles + markers + grid lines) to sync with state
   const regionOverlaysRef = useRef<Map<string, { 
@@ -245,6 +246,63 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
   const getRandomColor = () => {
       return REGION_COLORS[Math.floor(Math.random() * REGION_COLORS.length)];
   };
+
+  // --- User Location Logic ---
+  const handleMyLocation = useCallback(() => {
+    if (!mapInstance || !navigator.geolocation) return;
+
+    navigator.geolocation.getCurrentPosition(
+      async (position) => {
+        const pos = { lat: position.coords.latitude, lng: position.coords.longitude };
+        
+        mapInstance.panTo(pos);
+        mapInstance.setZoom(16);
+
+        // Marker Logic
+        let AdvancedMarkerElement: any;
+        if (window.google?.maps?.importLibrary) {
+             const lib = await window.google.maps.importLibrary("marker");
+             AdvancedMarkerElement = lib.AdvancedMarkerElement;
+        } else {
+             AdvancedMarkerElement = window.google.maps.marker?.AdvancedMarkerElement;
+        }
+
+        if (AdvancedMarkerElement) {
+             if (!userMarkerRef.current) {
+                  const userDiv = document.createElement("div");
+                  userDiv.className = "marker-user";
+                  userDiv.style.backgroundColor = "#3b82f6";
+                  userDiv.style.width = "18px";
+                  userDiv.style.height = "18px";
+                  userDiv.style.borderRadius = "50%";
+                  userDiv.style.boxShadow = "0 0 15px rgba(59, 130, 246, 0.6)";
+                  userDiv.style.border = "3px solid white";
+                  
+                  userMarkerRef.current = new AdvancedMarkerElement({
+                    position: pos,
+                    map: mapInstance,
+                    content: userDiv,
+                    title: "You are here",
+                  });
+             } else {
+                  userMarkerRef.current.position = pos;
+             }
+        }
+      },
+      (err) => {
+          console.error("Loc Error", err);
+          // Optional: Show error toast
+      },
+      { enableHighAccuracy: true }
+    );
+  }, [mapInstance]);
+
+  // Initial location check
+  useEffect(() => {
+    if (mapInstance) {
+        handleMyLocation();
+    }
+  }, [mapInstance, handleMyLocation]);
 
   // --- Image Upload Logic ---
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1004,41 +1062,6 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
     document.head.appendChild(script);
   }, [apiKey, initialCenter, initializeMap, showKeyInput]);
 
-  useEffect(() => {
-    if (mapInstance && navigator.geolocation) {
-      navigator.geolocation.getCurrentPosition(
-        async (position) => {
-          const pos = { lat: position.coords.latitude, lng: position.coords.longitude };
-          mapInstance.setCenter(pos);
-          let AdvancedMarkerElement;
-          if (window.google?.maps?.importLibrary) {
-               const lib = await window.google.maps.importLibrary("marker");
-               AdvancedMarkerElement = lib.AdvancedMarkerElement;
-          } else {
-               AdvancedMarkerElement = window.google.maps.marker.AdvancedMarkerElement;
-          }
-          if (AdvancedMarkerElement) {
-              const userDiv = document.createElement("div");
-              userDiv.className = "marker-user";
-              userDiv.style.backgroundColor = "#3b82f6";
-              userDiv.style.width = "18px";
-              userDiv.style.height = "18px";
-              userDiv.style.borderRadius = "50%";
-              userDiv.style.boxShadow = "0 0 15px rgba(59, 130, 246, 0.6)";
-              userDiv.style.border = "3px solid white";
-              new AdvancedMarkerElement({
-                position: pos,
-                map: mapInstance,
-                content: userDiv,
-                title: "You are here",
-              });
-          }
-        },
-        (err) => console.log("Geolocation permission denied", err)
-      );
-    }
-  }, [mapInstance]);
-
   const handleSaveKey = (e: React.FormEvent) => {
     e.preventDefault();
     if (manualKey.trim()) {
@@ -1111,6 +1134,37 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
                 >
                    <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" /></svg>
                 </button>
+            </div>
+            
+            {/* My Location FAB - Adjusted for better visibility and Z-Index */}
+            <div className="absolute bottom-36 right-4 flex flex-col gap-3 z-50">
+               {/* Zoom Control Group */}
+               <div className="flex flex-col rounded-xl overflow-hidden shadow-xl border border-white/20">
+                  <button 
+                     onClick={() => mapInstance?.setZoom((mapInstance.getZoom() || 10) + 1)}
+                     className="p-3 bg-white text-slate-700 hover:bg-slate-50 border-b border-slate-100 transition-colors"
+                  >
+                     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" /></svg>
+                  </button>
+                  <button 
+                     onClick={() => mapInstance?.setZoom((mapInstance.getZoom() || 10) - 1)}
+                     className="p-3 bg-white text-slate-700 hover:bg-slate-50 transition-colors"
+                  >
+                     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 12H4" /></svg>
+                  </button>
+               </div>
+
+               {/* Location Button */}
+               <button
+                  onClick={handleMyLocation}
+                  className="p-3 bg-white text-slate-800 rounded-full shadow-xl hover:bg-slate-50 hover:text-blue-600 transition-all active:scale-95 border border-white/20"
+                  title="My Location"
+               >
+                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <circle cx="12" cy="12" r="3" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v2m0 12v2m8-8h-2M6 12H4" />
+                  </svg>
+               </button>
             </div>
             
             {selectedPanoId && scanPoints[selectedPanoId] && (
@@ -1354,4 +1408,3 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
     </div>
   );
 };
-    
