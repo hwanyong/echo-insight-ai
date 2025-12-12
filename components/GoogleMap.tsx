@@ -1,5 +1,6 @@
 
 import React, { useEffect, useRef, useState, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { GoogleMapProps, MapCoordinates, MapLayerType, ScanPoint } from '../types';
 import { Sidebar } from './Sidebar';
 import { AnalysisPanel } from './AnalysisPanel';
@@ -57,6 +58,74 @@ const LoadingSpinner: React.FC = () => (
     <p className="text-sm font-medium tracking-widest uppercase text-slate-400">Loading Map...</p>
   </div>
 );
+
+// --- Custom Map Overlay Component ---
+// This uses React Portal to render children into a Google Maps OverlayView
+interface MapOverlayProps {
+    map: any;
+    position: { lat: number; lng: number };
+    children: React.ReactNode;
+}
+
+const MapOverlay: React.FC<MapOverlayProps> = ({ map, position, children }) => {
+    const containerRef = useRef(document.createElement('div'));
+    const overlayRef = useRef<any>(null);
+
+    useEffect(() => {
+        containerRef.current.style.position = 'absolute';
+        containerRef.current.style.cursor = 'auto'; // allow clicking inside
+        
+        // Define Custom Overlay Class
+        class Overlay extends window.google.maps.OverlayView {
+            onAdd() {
+                // Append the container to the floatPane (above markers, below info windows)
+                this.getPanes().floatPane.appendChild(containerRef.current);
+            }
+            onRemove() {
+                if (containerRef.current.parentNode) {
+                    containerRef.current.parentNode.removeChild(containerRef.current);
+                }
+            }
+            draw() {
+                const projection = this.getProjection();
+                if (!projection) return;
+                
+                const point = projection.fromLatLngToDivPixel(new window.google.maps.LatLng(position.lat, position.lng));
+                if (point) {
+                    containerRef.current.style.left = point.x + 'px';
+                    containerRef.current.style.top = point.y + 'px';
+                }
+            }
+        }
+
+        const overlay = new Overlay();
+        overlay.setMap(map);
+        overlayRef.current = overlay;
+
+        // Prevent map clicks from triggering when clicking the overlay
+        const stopProp = (e: Event) => e.stopPropagation();
+        ['click', 'mousedown', 'touchstart', 'dblclick', 'contextmenu'].forEach(evt => {
+            containerRef.current.addEventListener(evt, stopProp);
+        });
+
+        return () => {
+            overlay.setMap(null);
+            ['click', 'mousedown', 'touchstart', 'dblclick', 'contextmenu'].forEach(evt => {
+                containerRef.current.removeEventListener(evt, stopProp);
+            });
+        };
+    }, [map]);
+
+    // Update position when prop changes
+    useEffect(() => {
+        if (overlayRef.current) {
+            overlayRef.current.draw();
+        }
+    }, [position]);
+
+    return createPortal(children, containerRef.current);
+};
+
 
 interface PricingStatsModalProps {
   count: number;
@@ -1437,11 +1506,20 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({
                </button>
             </div>
             
+            {/* Analysis Panel - Now rendered as a Map Overlay attached to the pin */}
             {selectedPanoId && scanPoints[selectedPanoId] && (
-                <AnalysisPanel 
-                    point={scanPoints[selectedPanoId]} 
-                    onClose={() => setSelectedPanoId(null)} 
-                />
+                <MapOverlay 
+                    map={mapInstance} 
+                    position={{ 
+                        lat: scanPoints[selectedPanoId].location.latitude, 
+                        lng: scanPoints[selectedPanoId].location.longitude 
+                    }}
+                >
+                    <AnalysisPanel 
+                        point={scanPoints[selectedPanoId]} 
+                        onClose={() => setSelectedPanoId(null)} 
+                    />
+                </MapOverlay>
             )}
 
             {showStats && (

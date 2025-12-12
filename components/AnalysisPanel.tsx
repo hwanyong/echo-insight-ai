@@ -21,12 +21,13 @@ export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({ point, onClose }) 
   const maxConfidence = objects.reduce((max, obj) => Math.max(max, obj.confidence), 0);
   const confidencePercent = Math.round(maxConfidence * 100);
 
+  // Layout: 
+  // We use -translate-x-1/2 to center horizontally relative to the pin.
+  // We use -translate-y-[calc(100%+20px)] to lift it above the pin (100% height + 20px gap).
   return (
-    <div className="absolute top-20 right-4 z-50 animate-in slide-in-from-right fade-in duration-500">
-      {/* Speech Bubble Arrow (CSS Only) */}
-      <div className="absolute -top-2 right-6 w-4 h-4 bg-white/70 backdrop-blur-2xl border-l border-t border-white/50 rotate-45 z-10"></div>
+    <div className="absolute left-0 top-0 transform -translate-x-1/2 -translate-y-[calc(100%+16px)] z-50 animate-in zoom-in-95 fade-in duration-300 origin-bottom">
       
-      <div className="bg-white/70 backdrop-blur-2xl border border-white/50 shadow-[0_8px_32px_0_rgba(31,38,135,0.2)] rounded-2xl w-80 overflow-hidden flex flex-col max-h-[80vh]">
+      <div className="relative bg-white/70 backdrop-blur-2xl border border-white/50 shadow-[0_8px_32px_0_rgba(31,38,135,0.2)] rounded-2xl w-80 overflow-hidden flex flex-col max-h-[60vh]">
         
         {/* Header: Search Result Context */}
         <div className="p-4 border-b border-white/40 flex justify-between items-center bg-white/30">
@@ -36,12 +37,15 @@ export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({ point, onClose }) 
               ID: {point.panoId.slice(0, 8)}
             </p>
           </div>
-          <button onClick={onClose} className="p-1.5 hover:bg-white/50 rounded-full text-slate-500 hover:text-slate-800 transition-colors">
+          <button 
+            onClick={(e) => { e.stopPropagation(); onClose(); }} 
+            className="p-1.5 hover:bg-white/50 rounded-full text-slate-500 hover:text-slate-800 transition-colors cursor-pointer pointer-events-auto"
+          >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
           </button>
         </div>
 
-        <div className="overflow-y-auto p-4 space-y-4">
+        <div className="overflow-y-auto p-4 space-y-4 no-scrollbar">
           
           {/* Status Badge & Confidence */}
           <div className="flex items-center justify-between">
@@ -153,6 +157,9 @@ export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({ point, onClose }) 
 
         </div>
       </div>
+
+      {/* Speech Bubble Arrow pointing DOWN to the pin */}
+      <div className="absolute -bottom-2 left-1/2 -translate-x-1/2 w-4 h-4 bg-white/60 backdrop-blur-2xl border-r border-b border-white/50 rotate-45 z-40"></div>
     </div>
   );
 };
